@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+
+{% block title %}Groups - MasterMinds{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 1200px; margin-top: 2rem;">
+    <!-- Page Header -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+        <div>
+            <h1 style="margin: 0; font-size: 2rem; font-weight: 600;">Groups</h1>
+            <p style="margin: 0.5rem 0 0; color: #666; font-size: 0.95rem;">Manage your expense groups</p>
+        </div>
+        <a href="{{ url_for('create_group') }}" style="
+            background: #4CAF50;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            text-decoration: none;
+            font-weight: 500;
+            transition: background 0.3s;
+        " onmouseover="this.style.background='#45a049'" onmouseout="this.style.background='#4CAF50'">
+            + Create Group
+        </a>
+    </div>
+
+    <!-- Empty State -->
+    {% if not groups %}
+    <div style="
+        text-align: center;
+        padding: 3rem 2rem;
+        background: #f5f5f5;
+        border-radius: 0.5rem;
+        border: 2px dashed #ddd;
+    ">
+        <div style="font-size: 3rem; margin-bottom: 1rem;">📊</div>
+        <h2 style="margin: 0; font-size: 1.3rem; color: #333;">No Groups Yet</h2>
+        <p style="margin: 0.5rem 0 0; color: #666;">Create a group to start tracking shared expenses with friends</p>
+        <a href="{{ url_for('create_group') }}" style="
+            display: inline-block;
+            margin-top: 1rem;
+            background: #4CAF50;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            text-decoration: none;
+            font-weight: 500;
+        ">
+            Create Your First Group
+        </a>
+    </div>
+    {% else %}
+    <!-- Groups Grid -->
+    <div style="
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 1.5rem;
+    ">
+        {% for group in groups %}
+        <div style="
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            transition: box-shadow 0.3s, transform 0.3s;
+            cursor: pointer;
+        " onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.1)'; this.style.transform='translateY(-2px)'"
+           onmouseout="this.style.boxShadow=''; this.style.transform=''">
+            
+            <!-- Group Header -->
+            <div style="margin-bottom: 1rem;">
+                <h3 style="margin: 0 0 0.5rem; font-size: 1.2rem; color: #333;">
+                    <a href="{{ url_for('group_detail', group_id=group.group_id) }}" style="text-decoration: none; color: #333;">
+                        {{ group.group_name }}
+                    </a>
+                </h3>
+                <p style="margin: 0; font-size: 0.85rem; color: #999;">
+                    Created by {{ group.created_by }}
+                </p>
+            </div>
+
+            <!-- Group Stats -->
+            <div style="
+                background: #f9f9f9;
+                padding: 1rem;
+                border-radius: 0.5rem;
+                margin-bottom: 1rem;
+            ">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                    <span style="color: #666; font-size: 0.9rem;">👥 Members</span>
+                    <span style="font-weight: 600; color: #333;">{{ group.member_count }}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #666; font-size: 0.9rem;">💱 Currency</span>
+                    <span style="font-weight: 600; color: #333;">{{ group.currency }}</span>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div style="display: flex; gap: 0.5rem;">
+                <a href="{{ url_for('group_detail', group_id=group.group_id) }}" style="
+                    flex: 1;
+                    padding: 0.6rem;
+                    background: #007BFF;
+                    color: white;
+                    text-decoration: none;
+                    border-radius: 0.4rem;
+                    text-align: center;
+                    font-size: 0.9rem;
+                    font-weight: 500;
+                    transition: background 0.3s;
+                " onmouseover="this.style.background='#0056b3'" onmouseout="this.style.background='#007BFF'">
+                    View Details
+                </a>
+                <button onclick="copyInviteLink('{{ group.invite_token }}')" style="
+                    flex: 1;
+                    padding: 0.6rem;
+                    background: #f0f0f0;
+                    color: #333;
+                    border: none;
+                    border-radius: 0.4rem;
+                    cursor: pointer;
+                    font-size: 0.9rem;
+                    font-weight: 500;
+                    transition: background 0.3s;
+                " onmouseover="this.style.background='#e0e0e0'" onmouseout="this.style.background='#f0f0f0'">
+                    Copy Link
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function copyInviteLink(token) {
+    const baseUrl = window.location.origin;
+    const inviteUrl = `${baseUrl}/groups/invite/${token}`;
+    
+    navigator.clipboard.writeText(inviteUrl).then(() => {
+        alert('Invite link copied to clipboard!');
+    }).catch(() => {
+        alert('Failed to copy link');
+    });
+}
+</script>
+
+<style>
+    .container {
+        padding: 0 1rem;
+    }
+
+    @media (max-width: 768px) {
+        .container {
+            max-width: 100% !important;
+        }
+    }
+</style>
+{% endblock %}

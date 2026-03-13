@@ -1,0 +1,607 @@
+{% extends "base.html" %}
+
+{% block title %}{{ group.group_name }} - MasterMinds{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 1200px; margin-top: 2rem;">
+    <!-- Group Header -->
+    <div style="
+        background: white;
+        border: 1px solid #e0e0e0;
+        border-radius: 0.75rem;
+        padding: 2rem;
+        margin-bottom: 2rem;
+    ">
+        <div style="display: flex; justify-content: space-between; align-items: start;">
+            <div>
+                <h1 style="margin: 0 0 0.5rem; font-size: 2rem; font-weight: 600;">{{ group.group_name }}</h1>
+                <p style="margin: 0; color: #666; font-size: 0.95rem;">{{ group.description or 'No description' }}</p>
+                <div style="margin-top: 1rem; display: flex; gap: 2rem; font-size: 0.9rem; color: #666;">
+                    <div>
+                        <span style="color: #999;">Currency:</span>
+                        <span style="font-weight: 600; color: #333;">{{ group.currency }}</span>
+                    </div>
+                    <div>
+                        <span style="color: #999;">Members:</span>
+                        <span style="font-weight: 600; color: #333;">{{ group.members|length }}</span>
+                    </div>
+                    <div>
+                        <span style="color: #999;">Created by:</span>
+                        <span style="font-weight: 600; color: #333;">{{ group.created_by }}</span>
+                    </div>
+                </div>
+            </div>
+            {% if group.user_role == 'creator' %}
+            <button onclick="settleUpGroup({{ group.group_id }})" style="
+                background: #FF9800;
+                color: white;
+                padding: 0.75rem 1.5rem;
+                border: none;
+                border-radius: 0.5rem;
+                cursor: pointer;
+                font-weight: 500;
+                transition: background 0.3s;
+            " onmouseover="this.style.background='#e68900'" onmouseout="this.style.background='#FF9800'">
+                💰 Settle Up
+            </button>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Tab Navigation -->
+    <div style="
+        border-bottom: 2px solid #e0e0e0;
+        margin-bottom: 2rem;
+        display: flex;
+        gap: 2rem;
+    ">
+        <button onclick="switchTab('expenses')" class="tab-button active" data-tab="expenses" style="
+            padding: 1rem 0;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            color: #333;
+            border-bottom: 3px solid #007BFF;
+        ">
+            📋 Expenses
+        </button>
+        <button onclick="switchTab('members')" class="tab-button" data-tab="members" style="
+            padding: 1rem 0;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            color: #999;
+            border-bottom: 3px solid transparent;
+        ">
+            👥 Members
+        </button>
+        <button onclick="switchTab('settlement')" class="tab-button" data-tab="settlement" style="
+            padding: 1rem 0;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            color: #999;
+            border-bottom: 3px solid transparent;
+        ">
+            💵 Settlement
+        </button>
+    </div>
+
+    <!-- Expenses Tab -->
+    <div id="expenses-tab" class="tab-content" style="display: block;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+            <h2 style="margin: 0; font-size: 1.3rem;">Group Expenses</h2>
+            <button onclick="openAddExpenseModal({{ group.group_id }})" style="
+                background: #4CAF50;
+                color: white;
+                padding: 0.75rem 1.5rem;
+                border: none;
+                border-radius: 0.5rem;
+                cursor: pointer;
+                font-weight: 500;
+            ">
+                + Add Expense
+            </button>
+        </div>
+
+        {% if expenses %}
+        <div style="background: white; border-radius: 0.75rem; border: 1px solid #e0e0e0;">
+            {% for expense in expenses %}
+            <div style="
+                padding: 1.5rem;
+                border-bottom: 1px solid #e0e0e0;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            ">
+                <div>
+                    <h4 style="margin: 0 0 0.3rem; font-size: 1rem; color: #333;">{{ expense.description }}</h4>
+                    <p style="margin: 0; font-size: 0.85rem; color: #999;">
+                        Paid by <strong>{{ expense.paid_by }}</strong> on {{ expense.created_at[:10] }}
+                        {% if expense.category %}
+                        • {{ expense.category }}
+                        {% endif %}
+                    </p>
+                    <p style="margin: 0.3rem 0 0; font-size: 0.85rem; color: #666;">
+                        Split: <span style="background: #f0f0f0; padding: 0.2rem 0.5rem; border-radius: 0.3rem;">{{ expense.split_method|capitalize }}</span>
+                    </p>
+                </div>
+                <div style="text-align: right;">
+                    <div style="font-size: 1.3rem; font-weight: 600; color: #333;">{{ group.currency }} {{ "%.2f"|format(expense.amount) }}</div>
+                    <div style="margin-top: 0.5rem;">
+                        <button onclick="deleteExpense({{ group.group_id }}, {{ expense.id }})" style="
+                            background: #f44336;
+                            color: white;
+                            padding: 0.4rem 0.8rem;
+                            border: none;
+                            border-radius: 0.3rem;
+                            cursor: pointer;
+                            font-size: 0.85rem;
+                        ">
+                            Delete
+                        </button>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div style="
+            text-align: center;
+            padding: 2rem;
+            background: #f5f5f5;
+            border-radius: 0.5rem;
+            border: 2px dashed #ddd;
+        ">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">📝</div>
+            <p style="margin: 0; color: #666;">No expenses yet. Add one to get started!</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Members Tab -->
+    <div id="members-tab" class="tab-content" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+            <h2 style="margin: 0; font-size: 1.3rem;">Group Members</h2>
+            {% if group.user_role == 'creator' %}
+            <button onclick="openAddMemberModal({{ group.group_id }})" style="
+                background: #4CAF50;
+                color: white;
+                padding: 0.75rem 1.5rem;
+                border: none;
+                border-radius: 0.5rem;
+                cursor: pointer;
+                font-weight: 500;
+            ">
+                + Add Member
+            </button>
+            {% endif %}
+        </div>
+
+        <div style="background: white; border-radius: 0.75rem; border: 1px solid #e0e0e0;">
+            {% for member in group.members %}
+            <div style="
+                padding: 1.5rem;
+                border-bottom: 1px solid #e0e0e0;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            ">
+                <div>
+                    <h4 style="margin: 0 0 0.3rem; font-size: 1rem; color: #333;">{{ member.user_id }}</h4>
+                    <p style="margin: 0; font-size: 0.85rem; color: #999;">
+                        Joined {{ member.joined_at[:10] }}
+                        {% if member.role == 'creator' %}
+                        • <span style="background: #4CAF50; color: white; padding: 0.2rem 0.5rem; border-radius: 0.3rem; font-size: 0.8rem;">Creator</span>
+                        {% endif %}
+                    </p>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Settlement Tab -->
+    <div id="settlement-tab" class="tab-content" style="display: none;">
+        <h2 style="margin: 0 0 1.5rem; font-size: 1.3rem;">Settlement Plan</h2>
+        
+        {% if settlements %}
+        <div style="background: white; border-radius: 0.75rem; border: 1px solid #e0e0e0;">
+            <div style="padding: 1.5rem; background: #f9f9f9; border-bottom: 1px solid #e0e0e0;">
+                <p style="margin: 0; color: #666; font-size: 0.9rem;">
+                    Follow these transactions to settle all debts in the group:
+                </p>
+            </div>
+            {% for settlement in settlements %}
+            <div style="
+                padding: 1.5rem;
+                border-bottom: 1px solid #e0e0e0;
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+            ">
+                <div style="flex: 1;">
+                    <div style="font-size: 1rem; color: #333;">
+                        <span style="font-weight: 600;">{{ settlement.from }}</span>
+                        <span style="color: #999;">pays</span>
+                        <span style="font-weight: 600;">{{ settlement.to }}</span>
+                    </div>
+                </div>
+                <div style="
+                    background: #E8F5E9;
+                    padding: 0.75rem 1.5rem;
+                    border-radius: 0.5rem;
+                    font-weight: 600;
+                    color: #2E7D32;
+                    font-size: 1.1rem;
+                ">
+                    {{ group.currency }} {{ "%.2f"|format(settlement.amount) }}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div style="
+            text-align: center;
+            padding: 2rem;
+            background: #f5f5f5;
+            border-radius: 0.5rem;
+            border: 2px dashed #ddd;
+        ">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">✨</div>
+            <p style="margin: 0; color: #666;">Everyone is settled up! No transactions needed.</p>
+        </div>
+        {% endif %}
+
+        <!-- User Balances -->
+        {% if balances %}
+        <div style="margin-top: 2rem;">
+            <h3 style="margin: 0 0 1rem; font-size: 1.1rem;">User Balances</h3>
+            <div style="
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+                gap: 1rem;
+            ">
+                {% for user, balance in balances.items() %}
+                <div style="
+                    background: white;
+                    padding: 1rem;
+                    border-radius: 0.5rem;
+                    border-left: 4px solid {% if balance > 0 %}#4CAF50{% elif balance < 0 %}#f44336{% else %}#999{% endif %};
+                ">
+                    <div style="font-weight: 600; color: #333;">{{ user }}</div>
+                    <div style="
+                        margin-top: 0.5rem;
+                        font-size: 1.1rem;
+                        font-weight: 600;
+                        color: {% if balance > 0 %}#4CAF50{% elif balance < 0 %}#f44336{% else %}#999{% endif %};
+                    ">
+                        {% if balance > 0 %}
+                            Owed {{ "%.2f"|format(balance) }}
+                        {% elif balance < 0 %}
+                            Owes {{ "%.2f"|format(-balance) }}
+                        {% else %}
+                            Settled
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Add Expense Modal -->
+<div id="addExpenseModal" style="
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    z-index: 1000;
+" onclick="if(event.target === this) closeModal('addExpenseModal')">
+    <div style="
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: white;
+        padding: 2rem;
+        border-radius: 0.75rem;
+        width: 90%;
+        max-width: 500px;
+    ">
+        <h2 style="margin: 0 0 1.5rem;">Add Expense</h2>
+        <form id="expenseForm">
+            <div style="margin-bottom: 1rem;">
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Description</label>
+                <input type="text" id="expenseDescription" required style="
+                    width: 100%;
+                    padding: 0.75rem;
+                    border: 1px solid #ddd;
+                    border-radius: 0.4rem;
+                    font-size: 0.95rem;
+                    box-sizing: border-box;
+                ">
+            </div>
+
+            <div style="margin-bottom: 1rem;">
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Amount ({{ group.currency }})</label>
+                <input type="number" id="expenseAmount" step="0.01" required style="
+                    width: 100%;
+                    padding: 0.75rem;
+                    border: 1px solid #ddd;
+                    border-radius: 0.4rem;
+                    font-size: 0.95rem;
+                    box-sizing: border-box;
+                ">
+            </div>
+
+            <div style="margin-bottom: 1rem;">
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Split Method</label>
+                <select id="splitMethod" onchange="updateSplitUI()" style="
+                    width: 100%;
+                    padding: 0.75rem;
+                    border: 1px solid #ddd;
+                    border-radius: 0.4rem;
+                    font-size: 0.95rem;
+                ">
+                    <option value="equal">Equal Split (everyone pays same amount)</option>
+                    <option value="percentage">Percentage Split</option>
+                    <option value="custom">Custom Amount Split</option>
+                </select>
+            </div>
+
+            <div id="splitInputs" style="margin-bottom: 1rem; max-height: 200px; overflow-y: auto;"></div>
+
+            <div style="display: flex; gap: 1rem;">
+                <button type="button" onclick="closeModal('addExpenseModal')" style="
+                    flex: 1;
+                    padding: 0.75rem;
+                    background: #f0f0f0;
+                    border: none;
+                    border-radius: 0.4rem;
+                    cursor: pointer;
+                    font-weight: 500;
+                ">
+                    Cancel
+                </button>
+                <button type="submit" style="
+                    flex: 1;
+                    padding: 0.75rem;
+                    background: #4CAF50;
+                    color: white;
+                    border: none;
+                    border-radius: 0.4rem;
+                    cursor: pointer;
+                    font-weight: 500;
+                ">
+                    Add Expense
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Add Member Modal -->
+<div id="addMemberModal" style="
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    z-index: 1000;
+" onclick="if(event.target === this) closeModal('addMemberModal')">
+    <div style="
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: white;
+        padding: 2rem;
+        border-radius: 0.75rem;
+        width: 90%;
+        max-width: 500px;
+    ">
+        <h2 style="margin: 0 0 1.5rem;">Add Member</h2>
+        <form id="memberForm">
+            <div style="margin-bottom: 1rem;">
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Username</label>
+                <input type="text" id="memberUsername" required style="
+                    width: 100%;
+                    padding: 0.75rem;
+                    border: 1px solid #ddd;
+                    border-radius: 0.4rem;
+                    font-size: 0.95rem;
+                    box-sizing: border-box;
+                ">
+            </div>
+
+            <div style="display: flex; gap: 1rem;">
+                <button type="button" onclick="closeModal('addMemberModal')" style="
+                    flex: 1;
+                    padding: 0.75rem;
+                    background: #f0f0f0;
+                    border: none;
+                    border-radius: 0.4rem;
+                    cursor: pointer;
+                    font-weight: 500;
+                ">
+                    Cancel
+                </button>
+                <button type="submit" style="
+                    flex: 1;
+                    padding: 0.75rem;
+                    background: #4CAF50;
+                    color: white;
+                    border: none;
+                    border-radius: 0.4rem;
+                    cursor: pointer;
+                    font-weight: 500;
+                ">
+                    Add Member
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+const members = {{ group.members|tojson }};
+
+function switchTab(tabName) {
+    // Hide all tabs
+    document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.style.display = 'none';
+    });
+
+    // Reset button styles
+    document.querySelectorAll('.tab-button').forEach(btn => {
+        btn.style.color = '#999';
+        btn.style.borderBottomColor = 'transparent';
+    });
+
+    // Show selected tab
+    document.getElementById(tabName + '-tab').style.display = 'block';
+    document.querySelector(`[data-tab="${tabName}"]`).style.color = '#333';
+    document.querySelector(`[data-tab="${tabName}"]`).style.borderBottomColor = '#007BFF';
+}
+
+function openAddExpenseModal(groupId) {
+    updateSplitUI();
+    document.getElementById('addExpenseModal').style.display = 'block';
+    
+    document.getElementById('expenseForm').onsubmit = function(e) {
+        e.preventDefault();
+        addExpense(groupId);
+    };
+}
+
+function updateSplitUI() {
+    const method = document.getElementById('splitMethod').value;
+    const container = document.getElementById('splitInputs');
+    container.innerHTML = '';
+    
+    if (method === 'equal') {
+        container.innerHTML = '<p style="padding: 1rem; background: #f9f9f9; border-radius: 0.4rem; color: #666;">Amount will be split equally among all members</p>';
+    } else {
+        members.forEach(member => {
+            container.innerHTML += `
+                <div style="margin-bottom: 0.75rem;">
+                    <label style="font-size: 0.9rem; color: #666;">${member.user_id}</label>
+                    <input type="number" class="split-input" data-user="${member.user_id}" step="0.01" min="0" style="
+                        width: 100%;
+                        padding: 0.5rem;
+                        border: 1px solid #ddd;
+                        border-radius: 0.4rem;
+                        margin-top: 0.3rem;
+                    ">
+                </div>
+            `;
+        });
+    }
+}
+
+function addExpense(groupId) {
+    const description = document.getElementById('expenseDescription').value;
+    const amount = parseFloat(document.getElementById('expenseAmount').value);
+    const splitMethod = document.getElementById('splitMethod').value;
+    
+    const splits = {};
+    if (splitMethod !== 'equal') {
+        document.querySelectorAll('.split-input').forEach(input => {
+            splits[input.dataset.user] = parseFloat(input.value) || 0;
+        });
+    }
+
+    fetch(`/api/groups/${groupId}/expenses`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            amount, description, split_method: splitMethod, splits
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            location.reload();
+        } else {
+            alert('Error: ' + data.error);
+        }
+    });
+}
+
+function deleteExpense(groupId, expenseId) {
+    if (confirm('Are you sure you want to delete this expense?')) {
+        fetch(`/api/groups/${groupId}/expenses/${expenseId}`, {method: 'DELETE'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) location.reload();
+            else alert('Error: ' + data.error);
+        });
+    }
+}
+
+function openAddMemberModal() {
+    document.getElementById('addMemberModal').style.display = 'block';
+    document.getElementById('memberForm').onsubmit = function(e) {
+        e.preventDefault();
+        addMember({{ group.group_id }});
+    };
+}
+
+function addMember(groupId) {
+    const username = document.getElementById('memberUsername').value;
+    
+    fetch(`/api/groups/${groupId}/members`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            location.reload();
+        } else {
+            alert('Error: ' + data.error);
+        }
+    });
+}
+
+function settleUpGroup(groupId) {
+    fetch(`/api/groups/${groupId}/settlement`)
+    .then(r => r.json())
+    .then(data => {
+        if (data.settlements && data.settlements.length > 0) {
+            switchTab('settlement');
+            const settlement = document.getElementById('settlement-tab');
+            settlement.scrollIntoView({behavior: 'smooth'});
+        }
+    });
+}
+
+function closeModal(modalId) {
+    document.getElementById(modalId).style.display = 'none';
+}
+
+// Initialize
+updateSplitUI();
+</script>
+
+<style>
+    .tab-button:hover {
+        opacity: 0.8;
+    }
+</style>
+{% endblock %}

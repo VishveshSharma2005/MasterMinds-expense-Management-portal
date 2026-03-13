@@ -25,6 +25,7 @@
             </div>
             <nav class="nav-links" aria-label="Main Navigation">
                 <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Dashboard</a>
+                <a class="nav-link {% if request.endpoint == 'groups_dashboard' %}active{% endif %}" href="{{ url_for('groups_dashboard') }}">Groups</a>
                 <a class="nav-link {% if request.endpoint == 'friends' %}active{% endif %}" href="{{ url_for('friends') }}">Friends</a>
                 <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
             </nav>

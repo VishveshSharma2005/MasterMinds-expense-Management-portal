@@ -77,8 +77,248 @@ def init_db():
             UNIQUE(user_name, friend_name)
         )
     ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS groups (
+            group_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_name TEXT NOT NULL,
+            description TEXT,
+            currency TEXT CHECK(currency IN ('USD', 'INR', 'GBP', 'EUR', 'AUD')) DEFAULT 'INR',
+            created_by TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            invite_token TEXT UNIQUE,
+            FOREIGN KEY (created_by) REFERENCES users(username)
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS groups_members (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            role TEXT CHECK(role IN ('creator', 'member')) DEFAULT 'member',
+            joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            is_active BOOLEAN DEFAULT 1,
+            FOREIGN KEY (group_id) REFERENCES groups(group_id),
+            FOREIGN KEY (user_id) REFERENCES users(username),
+            UNIQUE(group_id, user_id)
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS groups_invitation (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            invite_token TEXT UNIQUE NOT NULL,
+            status TEXT CHECK(status IN ('pending', 'accepted', 'rejected')) DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expire_at TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(group_id)
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            paid_by TEXT NOT NULL,
+            amount REAL NOT NULL,
+            description TEXT NOT NULL,
+            category TEXT,
+            split_method TEXT CHECK(split_method IN ('equal', 'percentage', 'custom')) DEFAULT 'equal',
+            receipt_url TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(group_id),
+            FOREIGN KEY (paid_by) REFERENCES users(username)
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS expense_splits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            expense_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            split_amount REAL NOT NULL,
+            split_percentage REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (expense_id) REFERENCES expenses(id),
+            FOREIGN KEY (user_id) REFERENCES users(username),
+            UNIQUE(expense_id, user_id)
+        )
+    ''')
     conn.commit()
     conn.close()
+
+
+# ==================== ADVANCED GREEDY SETTLEMENT ALGORITHM ====================
+def advanced_greedy_settlement(group_id):
+    """
+    Calculate optimal payment settlements using Advanced Greedy Algorithm.
+    Minimizes number of transactions needed to settle all debts.
+    """
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Get all members and their balances
+    balances = {}
+    
+    # Get all group members
+    c.execute("SELECT user_id FROM groups_members WHERE group_id = ? AND is_active = 1", (group_id,))
+    members = c.fetchall()
+    
+    for member in members:
+        balances[member['user_id']] = 0
+    
+    # Calculate who paid what
+    c.execute("""
+        SELECT paid_by, SUM(amount) as total 
+        FROM expenses 
+        WHERE group_id = ? 
+        GROUP BY paid_by
+    """, (group_id,))
+    
+    paid = c.fetchall()
+    for person in paid:
+        balances[person['paid_by']] = balances.get(person['paid_by'], 0) + person['total']
+    
+    # Calculate what each person owes (based on splits)
+    c.execute("""
+        SELECT es.user_id, SUM(es.split_amount) as owed
+        FROM expense_splits es
+        JOIN expenses e ON e.id = es.expense_id
+        WHERE e.group_id = ?
+        GROUP BY es.user_id
+    """, (group_id,))
+    
+    owes = c.fetchall()
+    for person in owes:
+        balances[person['user_id']] = balances.get(person['user_id'], 0) - person['owed']
+    
+    conn.close()
+    
+    # Greedy settlement algorithm
+    settlements = []
+    balance_list = [(person, bal) for person, bal in balances.items() if abs(bal) > 0.01]
+    
+    while balance_list:
+        # Sort by balance - creditors (positive) first, then debtors
+        balance_list.sort(key=lambda x: x[1], reverse=True)
+        
+        # Get largest creditor and largest debtor
+        largest_creditor = balance_list[0]
+        largest_debtor = balance_list[-1]
+        
+        # Minimum amount to settle
+        settlement_amount = min(largest_creditor[1], -largest_debtor[1])
+        
+        settlements.append({
+            'from': largest_debtor[0],
+            'to': largest_creditor[0],
+            'amount': round(settlement_amount, 2)
+        })
+        
+        # Update balances
+        new_balance_list = []
+        for person, bal in balance_list:
+            if person == largest_creditor[0]:
+                new_bal = bal - settlement_amount
+            elif person == largest_debtor[0]:
+                new_bal = bal + settlement_amount
+            else:
+                new_bal = bal
+            
+            if abs(new_bal) > 0.01:  # Only keep non-zero balances
+                new_balance_list.append((person, new_bal))
+        
+        balance_list = new_balance_list
+    
+    return settlements, balances
+
+
+# ==================== GROUP HELPER FUNCTIONS ====================
+def generate_invite_token():
+    """Generate unique invite token"""
+    import secrets
+    return secrets.token_urlsafe(16)
+
+
+def get_user_groups(username):
+    """Get all groups for a user"""
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""
+        SELECT g.group_id, g.group_name, g.currency, g.created_by, g.created_at,
+               g.invite_token, COUNT(gm.user_id) as member_count
+        FROM groups g
+        JOIN groups_members gm ON g.group_id = gm.group_id
+        WHERE gm.user_id = ? AND gm.is_active = 1
+        GROUP BY g.group_id
+        ORDER BY g.created_at DESC
+    """, (username,))
+    
+    groups = []
+    for row in c.fetchall():
+        groups.append({
+            'group_id': row['group_id'],
+            'group_name': row['group_name'],
+            'currency': row['currency'],
+            'created_by': row['created_by'],
+            'created_at': row['created_at'],
+            'invite_token': row['invite_token'],
+            'member_count': row['member_count']
+        })
+    
+    conn.close()
+    return groups
+
+
+def get_group_details(group_id, username):
+    """Get detailed group info - verify user has access"""
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Verify access
+    c.execute("""
+        SELECT gm.role FROM groups_members gm
+        WHERE gm.group_id = ? AND gm.user_id = ?
+    """, (group_id, username))
+    
+    access = c.fetchone()
+    if not access:
+        conn.close()
+        return None
+    
+    # Get group info
+    c.execute("""
+        SELECT group_id, group_name, description, currency, created_by, created_at
+        FROM groups
+        WHERE group_id = ?
+    """, (group_id,))
+    
+    group = c.fetchone()
+    if not group:
+        conn.close()
+        return None
+    
+    # Get members
+    c.execute("""
+        SELECT user_id, role, joined_at
+        FROM groups_members
+        WHERE group_id = ? AND is_active = 1
+        ORDER BY joined_at
+    """, (group_id,))
+    
+    members = [{'user_id': m['user_id'], 'role': m['role'], 'joined_at': m['joined_at']} for m in c.fetchall()]
+    
+    conn.close()
+    
+    return {
+        'group_id': group['group_id'],
+        'group_name': group['group_name'],
+        'description': group['description'],
+        'currency': group['currency'],
+        'created_by': group['created_by'],
+        'created_at': group['created_at'],
+        'members': members,
+        'user_role': access['role']
+    }
 
 
 # ============= HELPER FUNCTIONS =============
@@ -503,6 +743,501 @@ def get_friends_api():
     
     conn.close()
     return {'friends': friends_list}, 200
+
+
+# ============= GROUP ROUTES =============
+
+@app.route('/groups')
+def groups_dashboard():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    
+    user_groups = get_user_groups(session['user_id'])
+    return render_template('groups.html', groups=user_groups)
+
+
+@app.route('/groups/<int:group_id>')
+def group_detail(group_id):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    
+    group = get_group_details(group_id, session['user_id'])
+    if not group:
+        flash('Group not found or you do not have access', 'error')
+        return redirect(url_for('groups_dashboard'))
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Get expenses
+    c.execute("""
+        SELECT id, paid_by, amount, description, created_at, split_method
+        FROM expenses
+        WHERE group_id = ?
+        ORDER BY created_at DESC
+    """, (group_id,))
+    
+    expenses = [
+        {
+            'id': row['id'],
+            'paid_by': row['paid_by'],
+            'amount': row['amount'],
+            'description': row['description'],
+            'created_at': row['created_at'],
+            'split_method': row['split_method']
+        }
+        for row in c.fetchall()
+    ]
+    
+    # Get settlement info
+    settlements, balances = advanced_greedy_settlement(group_id)
+    
+    conn.close()
+    
+    return render_template('group_detail.html', 
+                         group=group, 
+                         expenses=expenses,
+                         settlements=settlements,
+                         balances=balances)
+
+
+@app.route('/groups/create')
+def create_group():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Get friends
+    c.execute('''
+        SELECT friend_name, full_name FROM friends f
+        JOIN users u ON f.friend_name = u.username
+        WHERE f.user_name = ?
+        ORDER BY u.full_name
+    ''', (session['user_id'],))
+    
+    friends = [{'username': row['friend_name'], 'full_name': row['full_name']} for row in c.fetchall()]
+    conn.close()
+    
+    return render_template('create_group.html', friends=friends)
+
+
+# ============= GROUP API ROUTES =============
+
+@app.route('/api/groups', methods=['GET'])
+def api_get_groups():
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+    
+    groups = get_user_groups(session['user_id'])
+    return {'groups': groups}, 200
+
+
+@app.route('/api/groups', methods=['POST'])
+def api_create_group():
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+    
+    data = request.json
+    group_name = data.get('group_name', '').strip()
+    description = data.get('description', '').strip()
+    currency = data.get('currency', 'INR')
+    initial_members = data.get('initial_members', [])  # List of usernames
+    
+    if not group_name:
+        return {'error': 'Group name is required'}, 400
+    
+    if currency not in ['USD', 'INR', 'GBP', 'EUR', 'AUD']:
+        return {'error': 'Invalid currency'}, 400
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    try:
+        invite_token = generate_invite_token()
+        
+        # Create group
+        c.execute("""
+            INSERT INTO groups (group_name, description, currency, created_by, invite_token)
+            VALUES (?, ?, ?, ?, ?)
+        """, (group_name, description, currency, session['user_id'], invite_token))
+        
+        group_id = c.lastrowid
+        
+        # Add creator as member (role: creator)
+        c.execute("""
+            INSERT INTO groups_members (group_id, user_id, role, is_active)
+            VALUES (?, ?, 'creator', 1)
+        """, (group_id, session['user_id']))
+        
+        # Add initial members
+        for member_username in initial_members:
+            if member_username and member_username != session['user_id']:
+                try:
+                    c.execute("""
+                        INSERT INTO groups_members (group_id, user_id, role, is_active)
+                        VALUES (?, ?, 'member', 1)
+                    """, (group_id, member_username))
+                except sqlite3.IntegrityError:
+                    pass  # Skip if user already in group
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True,
+            'group_id': group_id,
+            'invite_token': invite_token,
+            'message': 'Group created successfully'
+        }, 201
+    
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return {'error': str(e)}, 500
+
+
+@app.route('/api/groups/<int:group_id>', methods=['GET'])
+def api_get_group(group_id):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+    
+    group = get_group_details(group_id, session['user_id'])
+    if not group:
+        return {'error': 'Group not found'}, 404
+    
+    return {'group': group}, 200
+
+
+@app.route('/api/groups/<int:group_id>/members', methods=['POST'])
+def api_add_group_member(group_id):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+    
+    data = request.json
+    username = data.get('username', '').strip()
+    
+    if not username:
+        return {'error': 'Username is required'}, 400
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Verify requester is creator
+    c.execute("""
+        SELECT role FROM groups_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, session['user_id']))
+    
+    access = c.fetchone()
+    if not access or access['role'] != 'creator':
+        conn.close()
+        return {'error': 'Only group creator can add members'}, 403
+    
+    # Check user exists
+    c.execute("SELECT username FROM users WHERE username = ?", (username,))
+    if not c.fetchone():
+        conn.close()
+        return {'error': 'User not found'}, 404
+    
+    try:
+        c.execute("""
+            INSERT INTO groups_members (group_id, user_id, role, is_active)
+            VALUES (?, ?, 'member', 1)
+        """, (group_id, username))
+        conn.commit()
+        conn.close()
+        
+        return {'success': True, 'message': 'Member added successfully'}, 201
+    
+    except sqlite3.IntegrityError:
+        conn.close()
+        return {'error': 'User already in group'}, 400
+
+
+@app.route('/api/groups/<int:group_id>/expenses', methods=['GET'])
+def api_get_expenses(group_id):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Verify access
+    c.execute("""
+        SELECT role FROM groups_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, session['user_id']))
+    
+    if not c.fetchone():
+        conn.close()
+        return {'error': 'Access denied'}, 403
+    
+    # Get expenses
+    c.execute("""
+        SELECT id, paid_by, amount, description, category, created_at, split_method, receipt_url
+        FROM expenses
+        WHERE group_id = ?
+        ORDER BY created_at DESC
+    """, (group_id,))
+    
+    expenses = []
+    for row in c.fetchall():
+        # Get splits for this expense
+        c.execute("""
+            SELECT user_id, split_amount, split_percentage
+            FROM expense_splits
+            WHERE expense_id = ?
+        """, (row['id'],))
+        
+        splits = [
+            {'user_id': s['user_id'], 'amount': s['split_amount'], 'percentage': s['split_percentage']}
+            for s in c.fetchall()
+        ]
+        
+        expenses.append({
+            'id': row['id'],
+            'paid_by': row['paid_by'],
+            'amount': row['amount'],
+            'description': row['description'],
+            'category': row['category'],
+            'created_at': row['created_at'],
+            'split_method': row['split_method'],
+            'receipt_url': row['receipt_url'],
+            'splits': splits
+        })
+    
+    conn.close()
+    return {'expenses': expenses}, 200
+
+
+@app.route('/api/groups/<int:group_id>/expenses', methods=['POST'])
+def api_create_expense(group_id):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+    
+    data = request.json
+    amount = data.get('amount')
+    description = data.get('description', '').strip()
+    category = data.get('category', '').strip()
+    split_method = data.get('split_method', 'equal')
+    splits = data.get('splits', {})  # Dict of {username: amount/percentage}
+    
+    # Validate
+    if not amount or amount <= 0:
+        return {'error': 'Invalid amount'}, 400
+    
+    if not description:
+        return {'error': 'Description is required'}, 400
+    
+    if split_method not in ['equal', 'percentage', 'custom']:
+        return {'error': 'Invalid split method'}, 400
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Verify access
+    c.execute("""
+        SELECT role FROM groups_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, session['user_id']))
+    
+    if not c.fetchone():
+        conn.close()
+        return {'error': 'Access denied'}, 403
+    
+    try:
+        # Get group members
+        c.execute("""
+            SELECT user_id FROM groups_members
+            WHERE group_id = ? AND is_active = 1
+        """, (group_id,))
+        
+        members = [m['user_id'] for m in c.fetchall()]
+        
+        if not members:
+            conn.close()
+            return {'error': 'Group has no members'}, 400
+        
+        # Create expense
+        c.execute("""
+            INSERT INTO expenses (group_id, paid_by, amount, description, category, split_method)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (group_id, session['user_id'], amount, description, category, split_method))
+        
+        expense_id = c.lastrowid
+        
+        # Create splits
+        if split_method == 'equal':
+            split_amount = amount / len(members)
+            for member in members:
+                c.execute("""
+                    INSERT INTO expense_splits (expense_id, user_id, split_amount)
+                    VALUES (?, ?, ?)
+                """, (expense_id, member, split_amount))
+        
+        elif split_method == 'percentage':
+            total_percentage = sum(float(splits.get(m, 0)) for m in members)
+            if abs(total_percentage - 100) > 0.01:
+                raise ValueError('Percentages must sum to 100')
+            
+            for member in members:
+                percentage = float(splits.get(member, 0))
+                split_amount = (amount * percentage) / 100
+                c.execute("""
+                    INSERT INTO expense_splits (expense_id, user_id, split_amount, split_percentage)
+                    VALUES (?, ?, ?, ?)
+                """, (expense_id, member, split_amount, percentage))
+        
+        elif split_method == 'custom':
+            total_amount = sum(float(splits.get(m, 0)) for m in members)
+            if abs(total_amount - amount) > 0.01:
+                raise ValueError('Split amounts must sum to total amount')
+            
+            for member in members:
+                split_amount = float(splits.get(member, 0))
+                if split_amount > 0:
+                    c.execute("""
+                        INSERT INTO expense_splits (expense_id, user_id, split_amount)
+                        VALUES (?, ?, ?)
+                    """, (expense_id, member, split_amount))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True,
+            'expense_id': expense_id,
+            'message': 'Expense created successfully'
+        }, 201
+    
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return {'error': str(e)}, 400
+
+
+@app.route('/api/groups/<int:group_id>/expenses/<int:expense_id>', methods=['DELETE'])
+def api_delete_expense(group_id, expense_id):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Verify access to group
+    c.execute("""
+        SELECT role FROM groups_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, session['user_id']))
+    
+    if not c.fetchone():
+        conn.close()
+        return {'error': 'Access denied'}, 403
+    
+    # Verify expense belongs to group
+    c.execute("""
+        SELECT paid_by FROM expenses
+        WHERE id = ? AND group_id = ?
+    """, (expense_id, group_id))
+    
+    expense = c.fetchone()
+    if not expense:
+        conn.close()
+        return {'error': 'Expense not found'}, 404
+    
+    try:
+        # Delete splits
+        c.execute("DELETE FROM expense_splits WHERE expense_id = ?", (expense_id,))
+        
+        # Delete expense
+        c.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
+        
+        conn.commit()
+        conn.close()
+        
+        return {'success': True, 'message': 'Expense deleted successfully'}, 200
+    
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return {'error': str(e)}, 500
+
+
+@app.route('/api/groups/<int:group_id>/settlement', methods=['GET'])
+def api_get_settlement(group_id):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Verify access
+    c.execute("""
+        SELECT role FROM groups_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, session['user_id']))
+    
+    if not c.fetchone():
+        conn.close()
+        return {'error': 'Access denied'}, 403
+    
+    conn.close()
+    
+    settlements, balances = advanced_greedy_settlement(group_id)
+    
+    return {
+        'settlements': settlements,
+        'balances': balances
+    }, 200
+
+
+@app.route('/api/groups/<token>/join', methods=['POST'])
+def api_join_group_via_invite(token):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Find group by invite token
+    c.execute("""
+        SELECT group_id FROM groups
+        WHERE invite_token = ?
+    """, (token,))
+    
+    group = c.fetchone()
+    if not group:
+        conn.close()
+        return {'error': 'Invalid invite token'}, 404
+    
+    group_id = group['group_id']
+    
+    try:
+        # Add user to group
+        c.execute("""
+            INSERT INTO groups_members (group_id, user_id, role, is_active)
+            VALUES (?, ?, 'member', 1)
+        """, (group_id, session['user_id']))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True,
+            'group_id': group_id,
+            'message': 'Successfully joined group'
+        }, 201
+    
+    except sqlite3.IntegrityError:
+        conn.close()
+        return {'error': 'Already a member of this group'}, 400
+    
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return {'error': str(e)}, 500
 
 
 if __name__ == '__main__':
