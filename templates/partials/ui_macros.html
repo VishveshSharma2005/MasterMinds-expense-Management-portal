@@ -1,0 +1,101 @@
+{% macro card(title='', subtitle='', classes='') -%}
+<section class="card section {{ classes }}">
+    {% if title %}
+    <h2 class="section-title">{{ title }}</h2>
+    {% endif %}
+    {% if subtitle %}
+    <p class="auth-subtitle" style="margin-bottom: 1rem;">{{ subtitle }}</p>
+    {% endif %}
+    {{ caller() }}
+</section>
+{%- endmacro %}
+
+{% macro page_header(title, subtitle='') -%}
+<header class="page-header">
+    <div>
+        <h1 class="page-title">{{ title }}</h1>
+        {% if subtitle %}
+        <p class="auth-subtitle" style="margin-bottom: 0;">{{ subtitle }}</p>
+        {% endif %}
+    </div>
+    {% if caller is defined %}
+    <div class="page-header-actions">
+        {{ caller() }}
+    </div>
+    {% endif %}
+</header>
+{%- endmacro %}
+
+{% macro stats_card(label, value, helper='', tone='primary') -%}
+<article class="card stats-card tone-{{ tone }}">
+    <p class="stats-label">{{ label }}</p>
+    <p class="stats-value">{{ value }}</p>
+    {% if helper %}
+    <p class="stats-helper">{{ helper }}</p>
+    {% endif %}
+</article>
+{%- endmacro %}
+
+{% macro data_table(headers=[]) -%}
+<div class="table-wrap">
+    <table class="table">
+        <thead>
+            <tr>
+                {% for header in headers %}
+                <th>{{ header }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {{ caller() }}
+        </tbody>
+    </table>
+</div>
+{%- endmacro %}
+
+{% macro empty_state(title='Nothing to show', description='') -%}
+<div class="empty-state" role="status" aria-live="polite">
+    <p class="empty-state-title">{{ title }}</p>
+    {% if description %}
+    <p class="empty-state-description">{{ description }}</p>
+    {% endif %}
+    {% if caller is defined %}
+    <div class="empty-state-actions">{{ caller() }}</div>
+    {% endif %}
+</div>
+{%- endmacro %}
+
+{% macro form_field(id, label, name=None, field_type='text', placeholder='', autocomplete='', required=false, value='', input_class='input', attrs='') -%}
+<label for="{{ id }}" class="field-group">
+    {{ label }}
+    <input
+        class="{{ input_class }}"
+        type="{{ field_type }}"
+        id="{{ id }}"
+        name="{{ name or id }}"
+        placeholder="{{ placeholder }}"
+        {% if autocomplete %}autocomplete="{{ autocomplete }}"{% endif %}
+        value="{{ value }}"
+        {% if required %}required{% endif %}
+        {{ attrs|safe }}
+    >
+</label>
+{%- endmacro %}
+
+{% macro modal(id, title, description='') -%}
+<div id="{{ id }}" class="mm-modal" hidden aria-hidden="true">
+    <div class="mm-modal-backdrop" data-modal-close data-modal-id="{{ id }}" onclick="(window.MMComponents&&window.MMComponents.closeModalById&&window.MMComponents.closeModalById('{{ id }}'))||(() => { const m=document.getElementById('{{ id }}'); if(m){ m.hidden=true; m.setAttribute('aria-hidden','true'); document.body.classList.remove('modal-open'); } })()"></div>
+    <div class="mm-modal-panel" role="dialog" aria-modal="true" aria-labelledby="{{ id }}Title">
+        <div class="mm-modal-head">
+            <h3 id="{{ id }}Title" class="section-title" style="margin: 0;">{{ title }}</h3>
+            <button type="button" class="btn btn-ghost" data-modal-close data-modal-id="{{ id }}" onclick="(window.MMComponents&&window.MMComponents.closeModalById&&window.MMComponents.closeModalById('{{ id }}'))||(() => { const m=document.getElementById('{{ id }}'); if(m){ m.hidden=true; m.setAttribute('aria-hidden','true'); document.body.classList.remove('modal-open'); } })()" aria-label="Close dialog">Close</button>
+        </div>
+        {% if description %}
+        <p class="auth-subtitle" style="margin-bottom: 0.8rem;">{{ description }}</p>
+        {% endif %}
+        <div class="mm-modal-body">
+            {{ caller() }}
+        </div>
+    </div>
+</div>
+{%- endmacro %}

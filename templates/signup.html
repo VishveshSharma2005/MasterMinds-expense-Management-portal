@@ -1,0 +1,87 @@
+{% extends 'base.html' %}
+{% from 'partials/ui_macros.html' import form_field %}
+
+{% block title %}Sign Up | MasterMinds{% endblock %}
+
+{% block auth_content %}
+<main class="auth-shell">
+    <div class="auth-layout">
+        <section class="auth-promo" aria-label="Why Join">
+            <h1>Create your expense circle in minutes.</h1>
+            <p>
+                Build your profile, connect with friends, and make every split transparent with a modern workspace.
+            </p>
+            <ul class="feature-list">
+                <li><span class="feature-dot" aria-hidden="true"></span>Simple onboarding with profile setup</li>
+                <li><span class="feature-dot" aria-hidden="true"></span>Secure account with hashed passwords</li>
+                <li><span class="feature-dot" aria-hidden="true"></span>Fast mobile-ready interface</li>
+            </ul>
+        </section>
+
+        <section class="card auth-card" aria-label="Sign Up Form">
+            <h2 class="auth-title">Create account</h2>
+            <p class="auth-subtitle">Join MasterMinds and start managing shared spending.</p>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                <div class="flash-wrap">
+                    {% for category, message in messages %}
+                    <div class="flash {% if category == 'error' %}error{% else %}success{% endif %}" role="status">
+                        <span>{{ message }}</span>
+                        <button type="button" class="flash-close" aria-label="Dismiss message">x</button>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            {% endwith %}
+
+            <form method="POST" enctype="multipart/form-data" class="form-grid" novalidate>
+                <div class="row-2">
+                    {{ form_field('email', 'Email', field_type='email', placeholder='you@example.com', autocomplete='email', required=true) }}
+                    {{ form_field('username', 'Username', placeholder='Choose a username', autocomplete='username', required=true) }}
+                </div>
+
+                <div class="row-2">
+                    {{ form_field('full_name', 'Full Name', placeholder='Your full name', autocomplete='name', required=true) }}
+                    <label for="phone_number">
+                        Phone Number
+                        <input class="input" type="text" id="phone_number" name="phone_number" placeholder="10-digit phone" autocomplete="tel" inputmode="numeric" maxlength="10" required>
+                        <span id="phoneFeedback" class="validation-msg" aria-live="polite"></span>
+                    </label>
+                </div>
+
+                <label for="upi_id">
+                    UPI ID
+                    <input class="input" type="text" id="upi_id" name="upi_id" placeholder="name@bank" required>
+                    <span id="upiFeedback" class="validation-msg" aria-live="polite"></span>
+                </label>
+
+                <div class="row-2">
+                    {{ form_field('password', 'Password', field_type='password', placeholder='At least 6 characters', autocomplete='new-password', required=true) }}
+                    <label for="confirm_password">
+                        Confirm Password
+                        <input class="input" type="password" id="confirm_password" name="confirm_password" placeholder="Retype password" autocomplete="new-password" required>
+                        <span id="passwordFeedback" class="validation-msg" aria-live="polite"></span>
+                    </label>
+                </div>
+
+                <label for="profile_pic">
+                    Profile Picture (Optional)
+                    <input class="input-file" type="file" id="profile_pic" name="profile_pic" accept="image/png,image/jpeg,image/gif">
+                    <span class="hint">Accepted formats: PNG, JPG, JPEG, GIF.</span>
+                </label>
+
+                <button class="btn btn-primary" type="submit">Create Account</button>
+            </form>
+
+            <p class="auth-subtitle" style="margin-top: 1rem; margin-bottom: 0;">
+                Already registered? <a href="{{ url_for('login') }}">Login now</a>
+            </p>
+        </section>
+    </div>
+</main>
+{% endblock %}
+
+{% block script_extra %}
+<script src="{{ url_for('static', filename='js/auth.js') }}"></script>
+{% endblock %}

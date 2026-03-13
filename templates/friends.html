@@ -1,0 +1,136 @@
+{% extends 'base.html' %}
+{% from 'partials/ui_macros.html' import page_header, stats_card, data_table, empty_state, modal %}
+
+{% block title %}Friends | MasterMinds{% endblock %}
+
+{% block content %}
+<main>
+    <section class="card section" aria-label="Friend Search">
+        {% call page_header('Friends and Requests', 'Discover users, send requests, and manage incoming connections.') %}
+            <button class="btn btn-ghost" type="button" data-modal-open="searchTipsModal">Search Tips</button>
+        {% endcall %}
+
+        <div class="stats-grid" aria-label="Friends Overview">
+            {{ stats_card('Friends', friends|length, 'Total connected profiles', 'primary') }}
+            {{ stats_card('Incoming', pending_requests|length, 'Pending requests to review', 'secondary') }}
+            {{ stats_card('Sent', sent_requests|length, 'Requests waiting for response', 'success') }}
+        </div>
+
+        <div class="friend-search">
+            <label for="searchInput" class="sr-only">Search Users</label>
+            <input id="searchInput" class="input" type="text" placeholder="Search by username or full name">
+            <div id="searchLoading" class="search-loading" hidden>
+                <div class="skeleton-table">
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                </div>
+            </div>
+            <div id="searchResults" class="search-results" aria-live="polite"></div>
+        </div>
+
+        <div class="tabs" role="tablist" aria-label="Friend Sections">
+            <button class="tab-btn active" data-tab="friendsPanel" type="button" role="tab" aria-selected="true">
+                Friends ({{ friends|length }})
+            </button>
+            <button class="tab-btn" data-tab="requestsPanel" type="button" role="tab" aria-selected="false">
+                Requests ({{ pending_requests|length }})
+            </button>
+            <button class="tab-btn" data-tab="sentPanel" type="button" role="tab" aria-selected="false">
+                Sent ({{ sent_requests|length }})
+            </button>
+        </div>
+    </section>
+
+    <section id="friendsPanel" class="card section tab-panel active" role="tabpanel" aria-label="Friends list">
+        <div class="tab-skeleton skeleton-table" hidden>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+        </div>
+        {% if friends %}
+        {% call data_table(['Friend', 'Connected On']) %}
+            {% for friend in friends %}
+            <tr>
+                <td>
+                    <div class="result-user">
+                        {% if friend['profile_pic_url'] %}
+                            <img class="avatar-mini" src="{{ friend['profile_pic_url'] }}" alt="{{ friend['full_name'] }}">
+                        {% else %}
+                            <span class="avatar-mini" aria-hidden="true">{{ friend['full_name'][0].upper() }}</span>
+                        {% endif %}
+                        <div>
+                            <p class="result-name">{{ friend['full_name'] }}</p>
+                            <p class="result-sub">@{{ friend['username'] }}</p>
+                        </div>
+                    </div>
+                </td>
+                <td>{{ friend['created_at'] }}</td>
+            </tr>
+            {% endfor %}
+        {% endcall %}
+        {% else %}
+        {{ empty_state('No friends yet', 'Use search above to add your first connection.') }}
+        {% endif %}
+    </section>
+
+    <section id="requestsPanel" class="card section tab-panel" role="tabpanel" aria-label="Pending requests">
+        <div class="tab-skeleton skeleton-table" hidden>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+        </div>
+        {% if pending_requests %}
+        {% call data_table(['From', 'Received', 'Action']) %}
+            {% for req in pending_requests %}
+            <tr>
+                <td>@{{ req['sender_name'] }}</td>
+                <td>{{ req['created_at'] }}</td>
+                <td>
+                    <div class="actions">
+                        <button class="btn btn-success" type="button" data-sender="{{ req['sender_name'] }}" data-action="accept">Accept</button>
+                        <button class="btn btn-danger" type="button" data-sender="{{ req['sender_name'] }}" data-action="reject">Reject</button>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        {% endcall %}
+        {% else %}
+        {{ empty_state('No pending requests', 'Incoming requests will appear here.') }}
+        {% endif %}
+    </section>
+
+    <section id="sentPanel" class="card section tab-panel" role="tabpanel" aria-label="Sent requests">
+        <div class="tab-skeleton skeleton-table" hidden>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+        </div>
+        {% if sent_requests %}
+        {% call data_table(['To', 'Sent On', 'Status']) %}
+            {% for req in sent_requests %}
+            <tr>
+                <td>@{{ req['receiver_name'] }}</td>
+                <td>{{ req['created_at'] }}</td>
+                <td><span class="badge pending">Pending</span></td>
+            </tr>
+            {% endfor %}
+        {% endcall %}
+        {% else %}
+        {{ empty_state('No outgoing requests', 'Requests you send will appear here.') }}
+        {% endif %}
+    </section>
+</main>
+
+{% call modal('searchTipsModal', 'Search Tips', 'Use these tips for faster friend discovery.') %}
+<ul style="margin: 0; padding-left: 1rem; line-height: 1.6;">
+    <li>Search by either username or full name.</li>
+    <li>Friends appear with Friend status in search results.</li>
+    <li>Pending requests cannot be sent twice.</li>
+</ul>
+{% endcall %}
+{% endblock %}
+
+{% block script_extra %}
+<script src="{{ url_for('static', filename='js/friends.js') }}"></script>
+{% endblock %}

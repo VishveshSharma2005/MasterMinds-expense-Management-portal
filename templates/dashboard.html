@@ -1,0 +1,77 @@
+{% extends 'base.html' %}
+{% from 'partials/ui_macros.html' import card, modal, page_header %}
+
+{% block title %}Dashboard | MasterMinds{% endblock %}
+
+{% block content %}
+<main class="dashboard-grid">
+    {% call card('Welcome, ' ~ user['full_name'] ~ '.', 'Here is your account snapshot and payment identity details.') %}
+        {% call page_header('Profile Overview', 'Your account identity and payment details in one place.') %}
+            <button class="btn btn-ghost" type="button" data-modal-open="quickHelpModal">Quick Help</button>
+        {% endcall %}
+        <div class="table-wrap">
+            <table class="profile-table">
+                <tr>
+                    <th>Email</th>
+                    <td>{{ user['email'] }}</td>
+                </tr>
+                <tr>
+                    <th>Username</th>
+                    <td>@{{ user['username'] }}</td>
+                </tr>
+                <tr>
+                    <th>Full Name</th>
+                    <td>{{ user['full_name'] }}</td>
+                </tr>
+                <tr>
+                    <th>Phone Number</th>
+                    <td>{{ user['phone_number'] }}</td>
+                </tr>
+                <tr>
+                    <th>UPI ID</th>
+                    <td>{{ user['upi_id'] }}</td>
+                </tr>
+                <tr>
+                    <th>Profile Created</th>
+                    <td>{{ user['created_at'] }}</td>
+                </tr>
+                <tr>
+                    <th>Last Updated</th>
+                    <td>{{ user['last_updated'] if user['last_updated'] else 'Never' }}</td>
+                </tr>
+            </table>
+        </div>
+    {% endcall %}
+
+    <aside class="card section" aria-label="User Identity Card">
+        <h2 class="section-title">Identity Card</h2>
+        {% if user['profile_pic_url'] %}
+            <img class="avatar-large" src="{{ user['profile_pic_url'] }}" alt="{{ user['full_name'] }}">
+        {% else %}
+            <div class="avatar-fallback" aria-hidden="true">{{ user['full_name'][0] }}</div>
+        {% endif %}
+
+        <p style="margin: 0.9rem 0 0.2rem; font-weight: 800; font-size: 1.1rem;">{{ user['full_name'] }}</p>
+        <p style="margin: 0; color: var(--muted);">@{{ user['username'] }}</p>
+
+        <p class="inline-metadata">
+            This profile is used across friend requests and shared expense interactions.
+        </p>
+
+        <div class="actions" style="margin-top: 1rem;">
+            <a class="btn btn-primary" href="{{ url_for('friends') }}">Manage Friends</a>
+            {% if user['profile_pic_url'] %}
+            <a class="btn btn-ghost" href="{{ user['profile_pic_url'] }}" target="_blank" rel="noopener noreferrer">Open Picture</a>
+            {% endif %}
+        </div>
+    </aside>
+</main>
+
+{% call modal('quickHelpModal', 'Dashboard Quick Help', 'Reusable modal example for future features.') %}
+<ul style="margin: 0; padding-left: 1rem; line-height: 1.6;">
+    <li>Use Friends page to send and respond to requests.</li>
+    <li>Theme toggle is available at bottom-right and stays saved.</li>
+    <li>Add new pages by reusing macros in templates/partials/ui_macros.html.</li>
+</ul>
+{% endcall %}
+{% endblock %}

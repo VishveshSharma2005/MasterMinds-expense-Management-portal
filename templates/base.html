@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}MasterMinds Expense Portal{% endblock %}</title>
+    <script>
+        (function () {
+            const storedTheme = localStorage.getItem('mm_theme');
+            if (storedTheme) {
+                document.documentElement.setAttribute('data-theme', storedTheme);
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    {% block head_extra %}{% endblock %}
+</head>
+<body>
+    {% if session.get('user_id') %}
+    <div class="page-wrap">
+        <header class="topbar">
+            <div class="brand">
+                <span class="brand-mark">M</span>
+                <span>MasterMinds</span>
+            </div>
+            <nav class="nav-links" aria-label="Main Navigation">
+                <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Dashboard</a>
+                <a class="nav-link {% if request.endpoint == 'friends' %}active{% endif %}" href="{{ url_for('friends') }}">Friends</a>
+                <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
+            </nav>
+        </header>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <div class="flash-wrap">
+                {% for category, message in messages %}
+                    <div class="flash {% if category == 'error' %}error{% else %}success{% endif %}" role="status">
+                        <span>{{ message }}</span>
+                        <button type="button" class="flash-close" aria-label="Dismiss message">x</button>
+                    </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </div>
+    {% else %}
+        {% block auth_content %}{% endblock %}
+    {% endif %}
+
+    <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle color theme">Dark Mode</button>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/components.js') }}"></script>
+    {% block script_extra %}{% endblock %}
+</body>
+</html>

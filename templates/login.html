@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+{% from 'partials/ui_macros.html' import form_field %}
+
+{% block title %}Login | MasterMinds{% endblock %}
+
+{% block auth_content %}
+<main class="auth-shell">
+    <div class="auth-layout">
+        <section class="auth-promo" aria-label="Product Highlights">
+            <h1>Track shared expenses with confidence.</h1>
+            <p>
+                MasterMinds helps you split bills, manage friend connections, and keep every settlement transparent.
+            </p>
+            <ul class="feature-list">
+                <li><span class="feature-dot" aria-hidden="true"></span>Instant friend search and requests</li>
+                <li><span class="feature-dot" aria-hidden="true"></span>Clean dashboard for account details</li>
+                <li><span class="feature-dot" aria-hidden="true"></span>Mobile-first layout for daily use</li>
+            </ul>
+        </section>
+
+        <section class="card auth-card" aria-label="Login Form">
+            <h2 class="auth-title">Welcome back</h2>
+            <p class="auth-subtitle">Sign in to continue managing your expense network.</p>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                <div class="flash-wrap">
+                    {% for category, message in messages %}
+                    <div class="flash {% if category == 'error' %}error{% else %}success{% endif %}" role="status">
+                        <span>{{ message }}</span>
+                        <button type="button" class="flash-close" aria-label="Dismiss message">x</button>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            {% endwith %}
+
+            <form method="POST" class="form-grid" novalidate>
+                {{ form_field('login_input', 'Username or Email', placeholder='Enter username or email', autocomplete='username', required=true) }}
+                {{ form_field('password', 'Password', field_type='password', placeholder='Enter password', autocomplete='current-password', required=true) }}
+
+                <button class="btn btn-primary" type="submit">Login</button>
+            </form>
+
+            <p class="auth-subtitle" style="margin-top: 1rem; margin-bottom: 0;">
+                New here? <a href="{{ url_for('signup') }}">Create your account</a>
+            </p>
+        </section>
+    </div>
+</main>
+{% endblock %}
