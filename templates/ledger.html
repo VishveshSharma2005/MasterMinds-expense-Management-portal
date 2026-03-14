@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Ledger - MasterMinds Expense Portal{% endblock %}
+
+{% block content %}
+<div class="container ledger-view">
+    <section class="hero-card">
+        <div class="hero-content">
+            <h1>Transaction Ledger</h1>
+            <p>Immutable payment records with hash chaining for transparent auditability.</p>
+        </div>
+    </section>
+
+    <section class="ledger-section">
+        {% if ledger_entries %}
+        <div class="ledger-table-container">
+            <table class="ledger-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Group</th>
+                        <th>From</th>
+                        <th>To</th>
+                        <th>Amount</th>
+                        <th>Method</th>
+                        <th>Txn ID</th>
+                        <th>Status</th>
+                        <th>Current Hash</th>
+                        <th>Previous Hash</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for entry in ledger_entries %}
+                    <tr>
+                        <td>{{ entry.created_at }}</td>
+                        <td>{{ entry.group_name }}</td>
+                        <td>{{ entry.from_name }} ({{ entry.from_user }})</td>
+                        <td>{{ entry.to_name }} ({{ entry.to_user }})</td>
+                        <td>Rs {{ "%.2f"|format(entry.amount) }}</td>
+                        <td>{{ entry.payment_method }}</td>
+                        <td>{{ entry.transaction_id }}</td>
+                        <td>
+                            <span class="badge {% if entry.status == 'COMPLETED' %}badge-success{% else %}badge-warning{% endif %}">
+                                {{ entry.status }}
+                            </span>
+                        </td>
+                        <td style="font-family: monospace; font-size: 0.72rem; max-width: 220px; word-break: break-all;">
+                            {{ entry.current_hash }}
+                        </td>
+                        <td style="font-family: monospace; font-size: 0.72rem; max-width: 220px; word-break: break-all;">
+                            {{ entry.previous_hash }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <h3>No ledger entries yet</h3>
+            <p>Completed settlements will show up here with immutable hash proofs.</p>
+        </div>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

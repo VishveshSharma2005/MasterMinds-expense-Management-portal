@@ -80,7 +80,8 @@
         }
 
         searchResults.innerHTML = results.map(function (user) {
-            return '<div class="result-item">'
+            const rowClass = user.is_friend ? 'result-item friend-result' : 'result-item';
+            return '<div class="' + rowClass + '">'
                 + '<div class="result-user">'
                 + userAvatarMarkup(user)
                 + '<div><p class="result-name">' + user.username + '</p><p class="result-sub">' + user.full_name + '</p></div>'

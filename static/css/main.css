@@ -561,6 +561,10 @@ select:focus {
     border-bottom: 1px solid var(--border);
 }
 
+.result-item.friend-result {
+    background: linear-gradient(90deg, rgba(34, 197, 94, 0.18) 0%, rgba(34, 197, 94, 0.08) 45%, rgba(34, 197, 94, 0.02) 100%);
+}
+
 .result-item:last-child {
     border-bottom: 0;
 }

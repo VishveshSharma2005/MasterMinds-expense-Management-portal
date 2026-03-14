@@ -221,7 +221,31 @@
 
     <!-- Settlement Tab -->
     <div id="settlement-tab" class="tab-content" style="display: none;">
-        <h2 style="margin: 0 0 1.5rem; font-size: 1.3rem;">Settlement Plan</h2>
+        <h2 style="margin: 0 0 0.5rem; font-size: 1.3rem;">Settlement Plan</h2>
+        <p style="margin: 0 0 1.25rem; color: #64748b; font-size: 0.92rem;">Choose a payment method per settlement line. Actions lock while processing to prevent duplicate submissions.</p>
+        <div id="settlementNotice" class="field-error" style="margin-bottom: 0.85rem;"></div>
+
+        {% if pending_cash_requests and pending_cash_requests|length > 0 %}
+        <div style="background: #fff7ed; border: 1px solid #fed7aa; border-radius: 0.75rem; padding: 1rem; margin-bottom: 1.2rem;">
+            <h3 style="margin: 0 0 0.75rem; font-size: 1rem; color: #9a3412;">Cash Approval Requests</h3>
+            <div style="display: grid; gap: 0.75rem;">
+                {% for req in pending_cash_requests %}
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; background: #fff; border: 1px solid #fdba74; border-radius: 0.5rem; padding: 0.85rem;">
+                    <div>
+                        <div style="font-weight: 600; color: #7c2d12;">{{ req.from_user }} paid you {{ group.currency }} {{ "%.2f"|format(req.amount) }} in CASH</div>
+                        <div style="font-size: 0.82rem; color: #9a3412;">Requested at {{ req.created_at }}</div>
+                    </div>
+                    <button type="button"
+                            data-action-btn="approve-cash-{{ req.id }}"
+                            onclick="approveCashPayment({{ group.group_id }}, {{ req.id }})"
+                            style="background: #ea580c; color: #fff; border: none; border-radius: 0.45rem; padding: 0.55rem 0.9rem; font-weight: 600; cursor: pointer;">
+                        Approve Cash
+                    </button>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
         
         {% if settlements %}
         <div style="background: white; border-radius: 0.75rem; border: 1px solid #e0e0e0;">
@@ -254,6 +278,27 @@
                     font-size: 1.1rem;
                 ">
                     {{ group.currency }} {{ "%.2f"|format(settlement.amount) }}
+                </div>
+                {% set is_debtor = settlement.from == session.get('user_id') %}
+                {% set upi_allowed = is_debtor and group.currency == 'INR' %}
+                <div style="display: flex; gap: 0.45rem; align-items: center;">
+                    <button type="button"
+                            data-action-btn="request-cash-{{ loop.index0 }}"
+                            data-action-group="settlement-{{ loop.index0 }}"
+                            onclick='requestCashPayment({{ group.group_id }}, {{ settlement.to|tojson }}, {{ settlement.amount }})'
+                            {% if not is_debtor %}disabled{% endif %}
+                            style="padding: 0.45rem 0.75rem; border-radius: 0.4rem; border: 1px solid #f59e0b; background: {% if is_debtor %}#fffbeb{% else %}#f5f5f5{% endif %}; color: #92400e; font-weight: 600; cursor: {% if is_debtor %}pointer{% else %}not-allowed{% endif %};">
+                        Cash
+                    </button>
+                    <button type="button"
+                            data-action-btn="request-upi-{{ loop.index0 }}"
+                            data-action-group="settlement-{{ loop.index0 }}"
+                            onclick='openUpiAmountModal({{ group.group_id }}, {{ settlement.to|tojson }}, {{ settlement.amount }})'
+                            {% if not upi_allowed %}disabled{% endif %}
+                            title="{% if group.currency != 'INR' %}UPI works only for INR groups{% elif not is_debtor %}Only debtor can initiate UPI{% endif %}"
+                            style="padding: 0.45rem 0.75rem; border-radius: 0.4rem; border: 1px solid #2563eb; background: {% if upi_allowed %}#eff6ff{% else %}#f5f5f5{% endif %}; color: #1d4ed8; font-weight: 600; cursor: {% if upi_allowed %}pointer{% else %}not-allowed{% endif %};">
+                        {% if group.currency == 'INR' %}UPI{% else %}UPI (INR only){% endif %}
+                    </button>
                 </div>
             </div>
             {% endfor %}
@@ -304,6 +349,7 @@
                     </div>
                 </div>
                 {% endfor %}
+            </div>
         </div>
         {% endif %}
     </div>
@@ -386,15 +432,18 @@
         <h2 style="margin: 0 0 1.5rem;">Add Expense</h2>
         <form id="expenseForm">
             <div style="margin-bottom: 1rem;">
-                <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Description</label>
-                <input type="text" id="expenseDescription" required style="
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: #1f2937;">Expense Name</label>
+                <input type="text" id="expenseDescription" placeholder="e.g. Dinner at Spice Hub" required style="
                     width: 100%;
                     padding: 0.75rem;
-                    border: 1px solid #ddd;
+                    border: 1px solid #cfd4dc;
                     border-radius: 0.4rem;
                     font-size: 0.95rem;
                     box-sizing: border-box;
+                    color: #111827;
+                    background: #ffffff;
                 ">
+                <div id="expenseDescriptionError" class="field-error" aria-live="polite"></div>
             </div>
 
             <div style="margin-bottom: 1rem;">
@@ -407,6 +456,7 @@
                     font-size: 0.95rem;
                     box-sizing: border-box;
                 ">
+                <div id="expenseAmountError" class="field-error" aria-live="polite"></div>
             </div>
 
             <div style="margin-bottom: 1rem;">
@@ -425,6 +475,7 @@
             </div>
 
             <div id="splitInputs" style="margin-bottom: 1rem; max-height: 200px; overflow-y: auto;"></div>
+            <div id="expenseFormError" class="field-error" aria-live="polite"></div>
 
             <div style="display: flex; gap: 1rem;">
                 <button type="button" onclick="closeModal('addExpenseModal')" style="
@@ -481,7 +532,7 @@
         <form id="memberForm">
             <div style="margin-bottom: 1rem;">
                 <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Username</label>
-                <input type="text" id="memberUsername" required style="
+                <input type="text" id="memberUsername" autocomplete="off" placeholder="Type username..." required style="
                     width: 100%;
                     padding: 0.75rem;
                     border: 1px solid #ddd;
@@ -489,7 +540,11 @@
                     font-size: 0.95rem;
                     box-sizing: border-box;
                 ">
+                <div id="memberUsernameError" class="field-error" aria-live="polite"></div>
+                <div id="memberSuggestions" class="member-suggestions" aria-live="polite"></div>
             </div>
+
+            <div id="memberFormError" class="field-error" aria-live="polite"></div>
 
             <div style="display: flex; gap: 1rem;">
                 <button type="button" onclick="closeModal('addMemberModal')" style="
@@ -520,8 +575,157 @@
     </div>
 </div>
 
+<!-- UPI Amount Selection Modal -->
+<div id="upiAmountModal" style="
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    z-index: 1100;
+" onclick="if(event.target === this) closeModal('upiAmountModal')">
+    <div style="
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: white;
+        padding: 1.5rem;
+        border-radius: 0.75rem;
+        width: 92%;
+        max-width: 420px;
+    ">
+        <h3 style="margin: 0 0 0.7rem;">UPI Payment</h3>
+        <p style="margin: 0 0 1rem; color: #64748b; font-size: 0.9rem;">Choose whether to pay full dues or a custom amount.</p>
+
+        <div style="display: grid; gap: 0.55rem; margin-bottom: 0.9rem;">
+            <label style="display:flex; align-items:center; gap:0.55rem;">
+                <input type="radio" name="upiAmountMode" value="full" checked>
+                <span>Pay full amount (<strong id="upiFullAmountText">Rs 0.00</strong>)</span>
+            </label>
+            <label style="display:flex; align-items:center; gap:0.55rem;">
+                <input type="radio" name="upiAmountMode" value="custom">
+                <span>Pay custom amount</span>
+            </label>
+        </div>
+
+        <div style="margin-bottom: 0.9rem;">
+            <input type="number" id="upiCustomAmount" step="0.01" min="0.01" placeholder="Enter custom amount" disabled style="
+                width: 100%;
+                padding: 0.65rem;
+                border: 1px solid #d1d5db;
+                border-radius: 0.45rem;
+                box-sizing: border-box;
+            ">
+            <div id="upiAmountError" class="field-error" style="margin-top: 0.45rem;"></div>
+        </div>
+
+        <div style="display:flex; gap:0.65rem;">
+            <button type="button" onclick="closeModal('upiAmountModal')" style="flex:1; padding:0.65rem; border:none; border-radius:0.45rem; background:#f1f5f9; cursor:pointer;">Cancel</button>
+            <button type="button" id="upiProceedBtn" onclick="proceedUpiPayment()" style="flex:1; padding:0.65rem; border:none; border-radius:0.45rem; background:#2563eb; color:#fff; font-weight:600; cursor:pointer;">Pay</button>
+        </div>
+    </div>
+</div>
+
+<!-- UPI QR Modal -->
+<div id="upiQrModal" style="
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    z-index: 1200;
+" onclick="if(event.target === this) closeModal('upiQrModal')">
+    <div style="
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: white;
+        padding: 1.5rem;
+        border-radius: 0.75rem;
+        width: 92%;
+        max-width: 460px;
+    ">
+        <h3 style="margin: 0 0 0.55rem;">Scan & Pay</h3>
+        <p id="upiQrSubtext" style="margin: 0 0 0.9rem; color: #64748b; font-size: 0.9rem;"></p>
+
+        <div id="upiQrContainer" style="display:flex; justify-content:center; padding:0.8rem 0;"></div>
+
+        <div style="text-align:center; margin: 0.5rem 0 0.8rem;">
+            <a href="#" id="upiFallbackLink" onclick="toggleUpiFallback(event)" style="font-size:0.86rem;">Unable to scan QR?</a>
+        </div>
+
+        <div id="upiFallbackPanel" style="display:none; background:#f8fafc; border:1px solid #e2e8f0; border-radius:0.5rem; padding:0.75rem; margin-bottom:0.9rem;">
+            <div style="font-size:0.88rem; margin-bottom:0.35rem;"><strong>UPI ID:</strong> <span id="upiFallbackId"></span></div>
+            <div style="font-size:0.88rem; margin-bottom:0.35rem;"><strong>Amount:</strong> Rs <span id="upiFallbackAmount"></span></div>
+            <a id="upiDeepLink" href="#" style="font-size:0.85rem;">Open UPI app with amount</a>
+            <div style="display:flex; gap:0.5rem; margin-top:0.6rem;">
+                <button type="button" onclick="copyUpiFallbackId()" style="flex:1; padding:0.45rem; border:1px solid #cbd5e1; border-radius:0.4rem; background:#fff; font-size:0.82rem; cursor:pointer;">Copy UPI ID</button>
+                <button type="button" onclick="copyUpiDeepLink()" style="flex:1; padding:0.45rem; border:1px solid #cbd5e1; border-radius:0.4rem; background:#fff; font-size:0.82rem; cursor:pointer;">Copy Link</button>
+            </div>
+        </div>
+
+        <div style="margin-bottom: 0.9rem;">
+            <label style="display:block; margin-bottom:0.35rem; font-size:0.86rem; color:#475569;">UTR/Reference (optional)</label>
+            <input type="text" id="upiRefInput" placeholder="Enter UTR/reference after payment" style="
+                width:100%;
+                padding:0.6rem;
+                border:1px solid #d1d5db;
+                border-radius:0.45rem;
+                box-sizing:border-box;
+            ">
+        </div>
+
+        <div style="display:flex; gap:0.65rem;">
+            <button type="button" onclick="closeModal('upiQrModal')" style="flex:1; padding:0.65rem; border:none; border-radius:0.45rem; background:#f1f5f9; cursor:pointer;">Cancel</button>
+            <button type="button" id="upiPaidBtn" onclick="confirmUpiPaid()" style="flex:1; padding:0.65rem; border:none; border-radius:0.45rem; background:#16a34a; color:#fff; font-weight:600; cursor:pointer;">Paid</button>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
 <script>
 const members = {{ group.members|tojson }};
+const groupCurrency = {{ group.currency|tojson }};
+const membersByUser = Object.fromEntries(members.map(m => [m.user_id, m]));
+let memberSearchTimer = null;
+let upiPaymentContext = null;
+
+function setFieldError(fieldId, message) {
+    const el = document.getElementById(fieldId + 'Error');
+    if (el) {
+        el.textContent = message || '';
+    }
+
+    const input = document.getElementById(fieldId);
+    if (input) {
+        input.style.borderColor = message ? '#dc2626' : '#ddd';
+    }
+}
+
+function setFormError(formErrorId, message) {
+    const el = document.getElementById(formErrorId);
+    if (el) {
+        el.textContent = message || '';
+    }
+}
+
+function clearExpenseErrors() {
+    setFieldError('expenseDescription', '');
+    setFieldError('expenseAmount', '');
+    setFormError('expenseFormError', '');
+}
+
+function clearMemberErrors() {
+    setFieldError('memberUsername', '');
+    setFormError('memberFormError', '');
+}
 
 function switchTab(tabName) {
     // Hide all tabs
@@ -548,6 +752,9 @@ function switchTab(tabName) {
 
 function openAddExpenseModal(groupId) {
     updateSplitUI();
+    clearExpenseErrors();
+    document.getElementById('expenseDescription').value = '';
+    document.getElementById('expenseAmount').value = '';
     document.getElementById('addExpenseModal').style.display = 'block';
     
     document.getElementById('expenseForm').onsubmit = function(e) {
@@ -582,12 +789,28 @@ function updateSplitUI() {
 }
 
 function addExpense(groupId) {
-    const description = document.getElementById('expenseDescription').value;
+    clearExpenseErrors();
+
+    const name = document.getElementById('expenseDescription').value.trim();
     const amount = parseFloat(document.getElementById('expenseAmount').value);
-    const splitMethod = document.getElementById('splitMethod').value;
+    const splitMethodInput = document.getElementById('splitMethod').value;
+
+    if (!name) {
+        setFieldError('expenseDescription', 'Expense name is required');
+        return;
+    }
+
+    if (!amount || amount <= 0) {
+        setFieldError('expenseAmount', 'Please enter a valid amount greater than 0');
+        return;
+    }
+
+    let splitType = 'EQUAL';
+    if (splitMethodInput === 'percentage') splitType = 'PERCENTAGE';
+    if (splitMethodInput === 'custom') splitType = 'EXACT';
     
     const splits = {};
-    if (splitMethod !== 'equal') {
+    if (splitMethodInput !== 'equal') {
         document.querySelectorAll('.split-input').forEach(input => {
             splits[input.dataset.user] = parseFloat(input.value) || 0;
         });
@@ -597,7 +820,10 @@ function addExpense(groupId) {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
-            amount, description, split_method: splitMethod, splits
+            amount,
+            name,
+            split_type: splitType,
+            splits
         })
     })
     .then(r => r.json())
@@ -605,8 +831,18 @@ function addExpense(groupId) {
         if (data.success) {
             location.reload();
         } else {
-            alert('Error: ' + data.error);
+            const msg = data.error || 'Unable to add expense';
+            if (msg.toLowerCase().includes('name')) {
+                setFieldError('expenseDescription', msg);
+            } else if (msg.toLowerCase().includes('amount')) {
+                setFieldError('expenseAmount', msg);
+            } else {
+                setFormError('expenseFormError', msg);
+            }
         }
+    })
+    .catch(() => {
+        setFormError('expenseFormError', 'Something went wrong while adding expense. Please try again.');
     });
 }
 
@@ -622,15 +858,26 @@ function deleteExpense(groupId, expenseId) {
 }
 
 function openAddMemberModal() {
+    clearMemberErrors();
+    document.getElementById('memberUsername').value = '';
+    document.getElementById('memberSuggestions').innerHTML = '';
     document.getElementById('addMemberModal').style.display = 'block';
     document.getElementById('memberForm').onsubmit = function(e) {
         e.preventDefault();
         addMember({{ group.group_id }});
     };
+
+    loadMemberSuggestions({{ group.group_id }}, '');
 }
 
 function addMember(groupId) {
-    const username = document.getElementById('memberUsername').value;
+    clearMemberErrors();
+    const username = document.getElementById('memberUsername').value.trim();
+
+    if (!username) {
+        setFieldError('memberUsername', 'Username is required');
+        return;
+    }
     
     fetch(`/api/groups/${groupId}/members`, {
         method: 'POST',
@@ -642,25 +889,418 @@ function addMember(groupId) {
         if (data.success) {
             location.reload();
         } else {
-            alert('Error: ' + data.error);
+            const msg = data.error || 'Unable to add member';
+            if (msg.toLowerCase().includes('username') || msg.toLowerCase().includes('user')) {
+                setFieldError('memberUsername', msg);
+            } else {
+                setFormError('memberFormError', msg);
+            }
+        }
+    })
+    .catch(() => {
+        setFormError('memberFormError', 'Something went wrong while adding member. Please try again.');
+    });
+}
+
+function selectMemberSuggestion(username) {
+    document.getElementById('memberUsername').value = username;
+    document.getElementById('memberSuggestions').innerHTML = '';
+    clearMemberErrors();
+}
+
+function renderMemberSuggestions(results) {
+    const panel = document.getElementById('memberSuggestions');
+    if (!panel) return;
+
+    if (!results || results.length === 0) {
+        panel.innerHTML = '<div class="member-suggestion-item muted">No users found</div>';
+        return;
+    }
+
+    panel.innerHTML = results.map((user) => {
+        const friendBadge = user.is_friend ? '<span class="member-badge">Friend</span>' : '<span class="member-badge member-badge-other">User</span>';
+        const rowClass = user.is_friend ? 'member-suggestion-item friend-first' : 'member-suggestion-item';
+        return `
+            <button type="button" class="${rowClass}" onclick="selectMemberSuggestion('${user.username}')">
+                <span>
+                    <strong>${user.username}</strong>
+                    <small>${user.full_name || ''}</small>
+                </span>
+                ${friendBadge}
+            </button>
+        `;
+    }).join('');
+}
+
+function loadMemberSuggestions(groupId, query) {
+    fetch(`/api/groups/${groupId}/member-suggestions?q=${encodeURIComponent(query || '')}`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.results) {
+                setFormError('memberFormError', data.error || 'Unable to load suggestions');
+                return;
+            }
+            renderMemberSuggestions(data.results);
+        })
+        .catch(() => {
+            setFormError('memberFormError', 'Unable to load member suggestions right now.');
+        });
+}
+
+function settleUpGroup(groupId) {
+    fetch(`/api/groups/${groupId}/settle`)
+    .then(r => r.json())
+    .then(data => {
+        switchTab('settlement');
+        const settlement = document.getElementById('settlement-tab');
+        settlement.scrollIntoView({behavior: 'smooth'});
+
+        if (!data.settlements || data.settlements.length === 0) {
+            setSettlementNotice('No pending settlements right now.', false);
         }
     });
 }
 
-function settleUpGroup(groupId) {
-    fetch(`/api/groups/${groupId}/settlement`)
-    .then(r => r.json())
-    .then(data => {
-        if (data.settlements && data.settlements.length > 0) {
-            switchTab('settlement');
-            const settlement = document.getElementById('settlement-tab');
-            settlement.scrollIntoView({behavior: 'smooth'});
+function setSettlementNotice(message, isError = false) {
+    const el = document.getElementById('settlementNotice');
+    if (!el) return;
+    el.textContent = message || '';
+    el.style.color = isError ? '#dc2626' : '#166534';
+}
+
+function setActionLoading(buttonEl, isLoading, loadingText, idleText) {
+    if (!buttonEl) return;
+
+    if (!buttonEl.dataset.originalText) {
+        buttonEl.dataset.originalText = idleText || buttonEl.textContent.trim();
+    }
+
+    if (isLoading) {
+        buttonEl.disabled = true;
+        buttonEl.classList.add('loading-action');
+        buttonEl.textContent = loadingText;
+    } else {
+        buttonEl.disabled = false;
+        buttonEl.classList.remove('loading-action');
+        buttonEl.textContent = buttonEl.dataset.originalText;
+    }
+}
+
+function setActionGroupDisabled(groupKey, isDisabled, sourceButton) {
+    if (!groupKey) return;
+    const groupButtons = document.querySelectorAll(`[data-action-group="${groupKey}"]`);
+    groupButtons.forEach((btn) => {
+        if (btn === sourceButton) return;
+        btn.disabled = isDisabled;
+        if (isDisabled) {
+            btn.classList.add('loading-action');
+        } else {
+            btn.classList.remove('loading-action');
         }
     });
+}
+
+function requestCashPayment(groupId, toUser, amount) {
+    setSettlementNotice('');
+    const btn = event && event.currentTarget ? event.currentTarget : null;
+    const actionGroup = btn ? btn.dataset.actionGroup : '';
+    setActionLoading(btn, true, 'Requesting...', 'Cash');
+    setActionGroupDisabled(actionGroup, true, btn);
+
+    fetch(`/api/groups/${groupId}/settlements/request-cash`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({to_user: toUser, amount})
+    })
+        .then(r => r.json().then(data => ({ok: r.ok, data})))
+        .then(({ok, data}) => {
+            if (!ok) {
+                setSettlementNotice(data.error || 'Failed to request cash settlement.', true);
+                setActionLoading(btn, false);
+                setActionGroupDisabled(actionGroup, false, btn);
+                return;
+            }
+            setSettlementNotice(data.message || 'Cash request sent successfully.');
+            setTimeout(() => window.location.reload(), 900);
+        })
+        .catch(() => {
+            setSettlementNotice('Unable to request cash settlement right now.', true);
+            setActionLoading(btn, false);
+            setActionGroupDisabled(actionGroup, false, btn);
+        });
+}
+
+function approveCashPayment(groupId, settlementId) {
+    setSettlementNotice('');
+    const btn = event && event.currentTarget ? event.currentTarget : null;
+    setActionLoading(btn, true, 'Approving...', 'Approve Cash');
+
+    fetch(`/api/groups/${groupId}/settlements/${settlementId}/approve-cash`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'}
+    })
+        .then(r => r.json().then(data => ({ok: r.ok, data})))
+        .then(({ok, data}) => {
+            if (!ok) {
+                setSettlementNotice(data.error || 'Failed to approve cash payment.', true);
+                setActionLoading(btn, false);
+                return;
+            }
+            setSettlementNotice(data.message || 'Cash payment approved successfully.');
+            setTimeout(() => window.location.reload(), 900);
+        })
+        .catch(() => {
+            setSettlementNotice('Unable to approve cash payment right now.', true);
+            setActionLoading(btn, false);
+        });
+}
+
+function openUpiAmountModal(groupId, toUser, amount) {
+    setSettlementNotice('');
+
+    if (groupCurrency !== 'INR') {
+        setSettlementNotice('UPI is available only for INR groups.', true);
+        return;
+    }
+
+    const receiver = membersByUser[toUser];
+    if (!receiver || !receiver.upi_id) {
+        setSettlementNotice('Receiver UPI ID not found.', true);
+        return;
+    }
+
+    const actionButton = event && event.currentTarget ? event.currentTarget : null;
+    upiPaymentContext = {
+        groupId,
+        toUser,
+        maxAmount: Number(amount),
+        selectedAmount: Number(amount),
+        settlementId: null,
+        receiverUpiId: receiver.upi_id,
+        receiverName: receiver.full_name || toUser,
+        actionButton,
+        actionGroup: actionButton ? actionButton.dataset.actionGroup : ''
+    };
+
+    document.getElementById('upiFullAmountText').textContent = `Rs ${Number(amount).toFixed(2)}`;
+    document.getElementById('upiAmountError').textContent = '';
+
+    const radios = document.querySelectorAll('input[name="upiAmountMode"]');
+    radios.forEach(r => r.checked = r.value === 'full');
+
+    const customInput = document.getElementById('upiCustomAmount');
+    customInput.value = '';
+    customInput.disabled = true;
+    customInput.max = String(Number(amount).toFixed(2));
+
+    document.getElementById('upiAmountModal').style.display = 'block';
+}
+
+function getSelectedUpiAmount() {
+    if (!upiPaymentContext) return null;
+    const modeEl = document.querySelector('input[name="upiAmountMode"]:checked');
+    const mode = modeEl ? modeEl.value : 'full';
+    if (mode === 'full') return Number(upiPaymentContext.maxAmount);
+
+    const customValue = parseFloat(document.getElementById('upiCustomAmount').value);
+    return Number.isFinite(customValue) ? customValue : null;
+}
+
+function proceedUpiPayment() {
+    if (!upiPaymentContext) return;
+
+    const amount = getSelectedUpiAmount();
+    const errEl = document.getElementById('upiAmountError');
+    errEl.textContent = '';
+
+    if (!amount || amount <= 0) {
+        errEl.textContent = 'Please enter a valid amount.';
+        return;
+    }
+
+    if (amount - upiPaymentContext.maxAmount > 0.01) {
+        errEl.textContent = `Amount cannot exceed Rs ${upiPaymentContext.maxAmount.toFixed(2)}.`;
+        return;
+    }
+
+    upiPaymentContext.selectedAmount = Number(amount.toFixed(2));
+
+    const proceedBtn = document.getElementById('upiProceedBtn');
+    setActionLoading(proceedBtn, true, 'Creating QR...', 'Pay');
+
+    if (upiPaymentContext.actionButton) {
+        setActionLoading(upiPaymentContext.actionButton, true, 'Processing...', 'UPI');
+    }
+    setActionGroupDisabled(upiPaymentContext.actionGroup, true, upiPaymentContext.actionButton);
+
+    fetch(`/api/groups/${upiPaymentContext.groupId}/settlements/initiate-upi`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            to_user: upiPaymentContext.toUser,
+            amount: upiPaymentContext.selectedAmount,
+            upi_ref: ''
+        })
+    })
+        .then(r => r.json().then(data => ({ok: r.ok, data})))
+        .then(({ok, data}) => {
+            if (!ok) {
+                errEl.textContent = data.error || 'Unable to initiate UPI payment.';
+                setActionLoading(proceedBtn, false);
+                if (upiPaymentContext.actionButton) {
+                    setActionLoading(upiPaymentContext.actionButton, false);
+                }
+                setActionGroupDisabled(upiPaymentContext.actionGroup, false, upiPaymentContext.actionButton);
+                return;
+            }
+
+            upiPaymentContext.settlementId = data.settlement_id;
+            upiPaymentContext.receiverUpiId = data.receiver_upi_id || upiPaymentContext.receiverUpiId;
+            upiPaymentContext.receiverName = data.receiver_name || upiPaymentContext.receiverName;
+
+            closeModal('upiAmountModal');
+            renderUpiQr();
+            document.getElementById('upiQrModal').style.display = 'block';
+            setActionLoading(proceedBtn, false);
+        })
+        .catch(() => {
+            errEl.textContent = 'Unable to initiate UPI payment right now.';
+            setActionLoading(proceedBtn, false);
+            if (upiPaymentContext.actionButton) {
+                setActionLoading(upiPaymentContext.actionButton, false);
+            }
+            setActionGroupDisabled(upiPaymentContext.actionGroup, false, upiPaymentContext.actionButton);
+        });
+}
+
+function buildUpiUri() {
+    const ctx = upiPaymentContext;
+    const note = `${ctx.toUser} settlement in ${groupCurrency}`;
+    const params = new URLSearchParams({
+        pa: ctx.receiverUpiId,
+        pn: ctx.receiverName,
+        am: ctx.selectedAmount.toFixed(2),
+        cu: 'INR',
+        tn: note
+    });
+    return `upi://pay?${params.toString()}`;
+}
+
+function renderUpiQr() {
+    if (!upiPaymentContext) return;
+    const uri = buildUpiUri();
+
+    document.getElementById('upiQrSubtext').textContent = `Pay Rs ${upiPaymentContext.selectedAmount.toFixed(2)} to ${upiPaymentContext.receiverName}`;
+    const qrContainer = document.getElementById('upiQrContainer');
+    qrContainer.innerHTML = '';
+    new QRCode(qrContainer, {
+        text: uri,
+        width: 220,
+        height: 220,
+        correctLevel: QRCode.CorrectLevel.M
+    });
+
+    document.getElementById('upiFallbackPanel').style.display = 'none';
+    document.getElementById('upiFallbackLink').textContent = 'Unable to scan QR?';
+    document.getElementById('upiFallbackId').textContent = upiPaymentContext.receiverUpiId;
+    document.getElementById('upiFallbackAmount').textContent = upiPaymentContext.selectedAmount.toFixed(2);
+    document.getElementById('upiDeepLink').href = uri;
+    document.getElementById('upiRefInput').value = '';
+}
+
+function toggleUpiFallback(e) {
+    e.preventDefault();
+    const link = document.getElementById('upiFallbackLink');
+    const panel = document.getElementById('upiFallbackPanel');
+    const showing = panel.style.display === 'none';
+    panel.style.display = showing ? 'block' : 'none';
+    link.textContent = showing ? 'Hide fallback details' : 'Unable to scan QR?';
+}
+
+async function copyTextToClipboard(text, successMsg) {
+    try {
+        if (!text) return;
+        await navigator.clipboard.writeText(text);
+        setSettlementNotice(successMsg || 'Copied successfully.');
+    } catch (_) {
+        setSettlementNotice('Copy failed. Please copy manually.', true);
+    }
+}
+
+function copyUpiFallbackId() {
+    const upiId = document.getElementById('upiFallbackId').textContent.trim();
+    copyTextToClipboard(upiId, 'UPI ID copied.');
+}
+
+function copyUpiDeepLink() {
+    const link = document.getElementById('upiDeepLink').href;
+    copyTextToClipboard(link, 'UPI link copied.');
+}
+
+function confirmUpiPaid() {
+    if (!upiPaymentContext || !upiPaymentContext.settlementId) {
+        setSettlementNotice('UPI payment session is invalid. Please retry.', true);
+        return;
+    }
+
+    const upiRef = document.getElementById('upiRefInput').value.trim();
+    const paidBtn = document.getElementById('upiPaidBtn');
+    setActionLoading(paidBtn, true, 'Finalizing...', 'Paid');
+
+    fetch(`/api/groups/${upiPaymentContext.groupId}/settlements/${upiPaymentContext.settlementId}/confirm-upi`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({upi_ref: upiRef})
+    })
+        .then(r => r.json().then(data => ({ok: r.ok, data})))
+        .then(({ok, data}) => {
+            if (!ok) {
+                setSettlementNotice(data.error || 'UPI confirmation failed.', true);
+                setActionLoading(paidBtn, false);
+                if (upiPaymentContext.actionButton) {
+                    setActionLoading(upiPaymentContext.actionButton, false);
+                }
+                setActionGroupDisabled(upiPaymentContext.actionGroup, false, upiPaymentContext.actionButton);
+                return;
+            }
+
+            closeModal('upiQrModal');
+            setSettlementNotice(data.message || 'UPI payment completed successfully.');
+            setTimeout(() => window.location.reload(), 1000);
+        })
+        .catch(() => {
+            setSettlementNotice('UPI confirmation failed due to network error.', true);
+            setActionLoading(paidBtn, false);
+            if (upiPaymentContext.actionButton) {
+                setActionLoading(upiPaymentContext.actionButton, false);
+            }
+            setActionGroupDisabled(upiPaymentContext.actionGroup, false, upiPaymentContext.actionButton);
+        });
 }
 
 function closeModal(modalId) {
     document.getElementById(modalId).style.display = 'none';
+
+    if ((modalId === 'upiAmountModal' || modalId === 'upiQrModal') && upiPaymentContext) {
+        const shouldResetForAmountCancel = modalId === 'upiAmountModal' && !upiPaymentContext.settlementId;
+        const shouldResetForQrClose = modalId === 'upiQrModal';
+        if (!shouldResetForAmountCancel && !shouldResetForQrClose) {
+            return;
+        }
+
+        const proceedBtn = document.getElementById('upiProceedBtn');
+        const paidBtn = document.getElementById('upiPaidBtn');
+        setActionLoading(proceedBtn, false);
+        setActionLoading(paidBtn, false);
+        if (upiPaymentContext.actionButton) {
+            setActionLoading(upiPaymentContext.actionButton, false);
+        }
+        setActionGroupDisabled(upiPaymentContext.actionGroup, false, upiPaymentContext.actionButton);
+
+        if (shouldResetForQrClose) {
+            upiPaymentContext = null;
+        }
+    }
 }
 
 // Ledger Functions
@@ -765,11 +1405,134 @@ async function loadLedgerData() {
 
 // Initialize
 updateSplitUI();
+
+const memberUsernameInput = document.getElementById('memberUsername');
+if (memberUsernameInput) {
+    memberUsernameInput.addEventListener('input', function () {
+        clearMemberErrors();
+        clearTimeout(memberSearchTimer);
+        memberSearchTimer = setTimeout(() => {
+            loadMemberSuggestions({{ group.group_id }}, memberUsernameInput.value.trim());
+        }, 220);
+    });
+}
+
+document.querySelectorAll('input[name="upiAmountMode"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+        const customInput = document.getElementById('upiCustomAmount');
+        const isCustom = radio.value === 'custom' && radio.checked;
+        customInput.disabled = !isCustom;
+        if (isCustom) {
+            customInput.focus();
+        }
+    });
+});
 </script>
 
 <style>
     .tab-button:hover {
         opacity: 0.8;
+    }
+
+    .field-error {
+        min-height: 1rem;
+        margin-top: 0.4rem;
+        font-size: 0.82rem;
+        color: #dc2626;
+    }
+
+    .member-suggestions {
+        margin-top: 0.6rem;
+        border: 1px solid #e5e7eb;
+        border-radius: 0.5rem;
+        max-height: 220px;
+        overflow-y: auto;
+        background: #fff;
+    }
+
+    .member-suggestion-item {
+        width: 100%;
+        border: 0;
+        background: transparent;
+        text-align: left;
+        cursor: pointer;
+        padding: 0.65rem 0.75rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #f3f4f6;
+    }
+
+    .member-suggestion-item:last-child {
+        border-bottom: 0;
+    }
+
+    .member-suggestion-item:hover {
+        background: #f9fafb;
+    }
+
+    .member-suggestion-item span {
+        display: grid;
+        gap: 0.15rem;
+    }
+
+    .member-suggestion-item small {
+        color: #6b7280;
+        font-size: 0.78rem;
+    }
+
+    .member-suggestion-item.friend-first {
+        background: linear-gradient(270deg, rgba(34, 197, 94, 0.16) 0%, rgba(34, 197, 94, 0.06) 40%, rgba(34, 197, 94, 0.01) 100%);
+    }
+
+    .member-badge {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 0.2rem 0.55rem;
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: #166534;
+        background: #dcfce7;
+        border: 1px solid #86efac;
+    }
+
+    .member-badge-other {
+        color: #334155;
+        background: #f1f5f9;
+        border-color: #cbd5e1;
+    }
+
+    .member-suggestion-item.muted {
+        padding: 0.7rem;
+        color: #6b7280;
+        font-size: 0.85rem;
+        cursor: default;
+    }
+
+    .loading-action {
+        opacity: 0.75;
+        position: relative;
+        pointer-events: none;
+    }
+
+    .loading-action::after {
+        content: '';
+        display: inline-block;
+        width: 0.68rem;
+        height: 0.68rem;
+        margin-left: 0.45rem;
+        border: 2px solid currentColor;
+        border-right-color: transparent;
+        border-radius: 50%;
+        vertical-align: -0.1rem;
+        animation: mm-spin 0.7s linear infinite;
+    }
+
+    @keyframes mm-spin {
+        to {
+            transform: rotate(360deg);
+        }
     }
 </style>
 {% endblock %}

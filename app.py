@@ -5,6 +5,8 @@ import sqlite3
 import os
 from datetime import datetime
 import secrets
+import hashlib
+import random
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
@@ -159,6 +161,68 @@ def init_db():
             FOREIGN KEY (payee_id) REFERENCES users(username)
         )
     ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS balances (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            balance REAL NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(group_id, user_id),
+            FOREIGN KEY (group_id) REFERENCES groups(group_id),
+            FOREIGN KEY (user_id) REFERENCES users(username)
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS settlements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            from_user TEXT NOT NULL,
+            to_user TEXT NOT NULL,
+            amount REAL NOT NULL,
+            payment_method TEXT CHECK(payment_method IN ('UPI', 'CASH')) NOT NULL,
+            approval_status TEXT CHECK(approval_status IN ('PENDING', 'APPROVED', 'REJECTED')) DEFAULT 'PENDING',
+            settlement_status TEXT CHECK(settlement_status IN ('PENDING', 'COMPLETED')) DEFAULT 'PENDING',
+            transaction_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(group_id),
+            FOREIGN KEY (from_user) REFERENCES users(username),
+            FOREIGN KEY (to_user) REFERENCES users(username)
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_id TEXT UNIQUE NOT NULL,
+            group_id INTEGER NOT NULL,
+            settlement_id INTEGER,
+            from_user TEXT NOT NULL,
+            to_user TEXT NOT NULL,
+            amount REAL NOT NULL,
+            payment_method TEXT NOT NULL,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(group_id),
+            FOREIGN KEY (settlement_id) REFERENCES settlements(id),
+            FOREIGN KEY (from_user) REFERENCES users(username),
+            FOREIGN KEY (to_user) REFERENCES users(username)
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS ledger_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tx_id TEXT NOT NULL,
+            group_id INTEGER NOT NULL,
+            from_user TEXT NOT NULL,
+            to_user TEXT NOT NULL,
+            amount REAL NOT NULL,
+            payment_method TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            previous_hash TEXT NOT NULL,
+            hash TEXT NOT NULL,
+            FOREIGN KEY (group_id) REFERENCES groups(group_id)
+        )
+    ''')
     
     # Migration: Add missing amount_owed column if it doesn't exist
     try:
@@ -168,6 +232,30 @@ def init_db():
             c.execute("ALTER TABLE expense_splits ADD COLUMN amount_owed REAL NOT NULL DEFAULT 0")
     except Exception as e:
         print(f"Migration check failed: {e}")
+
+    # Migration: Payments table compatibility (old DBs used from_user/to_user schema)
+    try:
+        c.execute("PRAGMA table_info(payments)")
+        payment_columns = [column[1] for column in c.fetchall()]
+
+        if 'payer_id' not in payment_columns:
+            c.execute("ALTER TABLE payments ADD COLUMN payer_id TEXT")
+        if 'payee_id' not in payment_columns:
+            c.execute("ALTER TABLE payments ADD COLUMN payee_id TEXT")
+        if 'status' not in payment_columns:
+            c.execute("ALTER TABLE payments ADD COLUMN status TEXT DEFAULT 'PENDING'")
+        if 'updated_at' not in payment_columns:
+            c.execute("ALTER TABLE payments ADD COLUMN updated_at TIMESTAMP")
+        if 'upi_transaction_ref' not in payment_columns:
+            c.execute("ALTER TABLE payments ADD COLUMN upi_transaction_ref TEXT")
+
+        # Backfill new payer/payee columns from legacy columns when available
+        if 'from_user' in payment_columns:
+            c.execute("UPDATE payments SET payer_id = COALESCE(payer_id, from_user)")
+        if 'to_user' in payment_columns:
+            c.execute("UPDATE payments SET payee_id = COALESCE(payee_id, to_user)")
+    except Exception as e:
+        print(f"Payments migration check failed: {e}")
     
     conn.commit()
     conn.close()
@@ -211,6 +299,19 @@ def calculate_group_balances(group_id):
     
     for row in c.fetchall():
         balances[row['user_id']] = balances.get(row['user_id'], 0) - row['total']
+
+    # Apply completed settlements so balances reflect already-paid amounts
+    c.execute("""
+        SELECT from_user, to_user, SUM(amount) as total
+        FROM settlements
+        WHERE group_id = ? AND settlement_status = 'COMPLETED'
+        GROUP BY from_user, to_user
+    """, (group_id,))
+
+    for row in c.fetchall():
+        paid_amount = row['total'] or 0
+        balances[row['from_user']] = balances.get(row['from_user'], 0) + paid_amount
+        balances[row['to_user']] = balances.get(row['to_user'], 0) - paid_amount
     
     conn.close()
     return {k: round(v, 2) for k, v in balances.items() if abs(v) > 0.01}
@@ -220,11 +321,8 @@ def advanced_greedy_settlement(group_id):
     """
     Calculate optimal payment settlements using Advanced Greedy Algorithm.
     Minimizes number of transactions needed to settle all debts.
-    Creates COMPLETED transaction records in the ledger.
+    Pure calculation only. No DB writes.
     """
-    conn = get_db()
-    c = conn.cursor()
-    
     balances = calculate_group_balances(group_id)
     
     # Greedy settlement algorithm
@@ -249,15 +347,6 @@ def advanced_greedy_settlement(group_id):
                 'to': largest_creditor[0],
                 'amount': settlement_amount
             })
-            
-            # Create COMPLETED transaction record
-            try:
-                c.execute("""
-                    INSERT INTO transactions (group_id, payer_id, payee_id, amount, status)
-                    VALUES (?, ?, ?, ?, 'COMPLETED')
-                """, (group_id, largest_debtor[0], largest_creditor[0], settlement_amount))
-            except:
-                pass  # Ignore if transaction already exists
         
         # Update balances
         new_balance_list = []
@@ -274,10 +363,74 @@ def advanced_greedy_settlement(group_id):
         
         balance_list = new_balance_list
     
+    return settlements, balances
+
+
+def generate_transaction_id():
+    return f"TXN{random.randint(100000, 999999)}"
+
+
+def generate_pending_transaction_id():
+    return f"PEND{random.randint(100000000, 999999999)}"
+
+
+def refresh_group_balances(group_id):
+    """Sync dynamic balances into balances table for fast reads/demo visibility."""
+    balances = calculate_group_balances(group_id)
+
+    conn = get_db()
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT user_id FROM groups_members
+        WHERE group_id = ? AND is_active = 1
+    """, (group_id,))
+    members = [row['user_id'] for row in c.fetchall()]
+
+    for user_id in members:
+        bal = float(balances.get(user_id, 0.0))
+        c.execute("""
+            INSERT INTO balances (group_id, user_id, balance, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(group_id, user_id)
+            DO UPDATE SET balance = excluded.balance, updated_at = excluded.updated_at
+        """, (group_id, user_id, bal, datetime.now()))
+
     conn.commit()
     conn.close()
-    
-    return settlements, balances
+
+
+def create_ledger_transaction(tx_id, group_id, from_user, to_user, amount, payment_method, conn=None):
+    """Create immutable ledger transaction using SHA256(previous_hash chain)."""
+    owns_connection = conn is None
+    if owns_connection:
+        conn = get_db()
+    c = conn.cursor()
+
+    c.execute("SELECT hash FROM ledger_transactions ORDER BY id DESC LIMIT 1")
+    row = c.fetchone()
+    previous_hash = row['hash'] if row else 'GENESIS'
+
+    ts = datetime.now().isoformat()
+    hash_input = f"{tx_id}{from_user}{to_user}{amount}{ts}{previous_hash}"
+    current_hash = hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
+
+    c.execute("""
+        INSERT INTO ledger_transactions
+        (tx_id, group_id, from_user, to_user, amount, payment_method, timestamp, previous_hash, hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (tx_id, group_id, from_user, to_user, amount, payment_method, ts, previous_hash, current_hash))
+
+    if owns_connection:
+        conn.commit()
+        conn.close()
+
+    return {
+        'tx_id': tx_id,
+        'timestamp': ts,
+        'hash': current_hash,
+        'previous_hash': previous_hash
+    }
 
 
 # ==================== GROUP HELPER FUNCTIONS ====================
@@ -347,13 +500,20 @@ def get_group_details(group_id, username):
     
     # Get members
     c.execute("""
-        SELECT user_id, role, joined_at
-        FROM groups_members
-        WHERE group_id = ? AND is_active = 1
-        ORDER BY joined_at
+        SELECT gm.user_id, gm.role, gm.joined_at, u.full_name, u.upi_id
+        FROM groups_members gm
+        JOIN users u ON u.username = gm.user_id
+        WHERE gm.group_id = ? AND gm.is_active = 1
+        ORDER BY gm.joined_at
     """, (group_id,))
-    
-    members = [{'user_id': m['user_id'], 'role': m['role'], 'joined_at': m['joined_at']} for m in c.fetchall()]
+
+    members = [{
+        'user_id': m['user_id'],
+        'role': m['role'],
+        'joined_at': m['joined_at'],
+        'full_name': m['full_name'],
+        'upi_id': m['upi_id']
+    } for m in c.fetchall()]
     
     conn.close()
     
@@ -367,6 +527,25 @@ def get_group_details(group_id, username):
         'members': members,
         'user_role': access['role']
     }
+
+
+def get_pending_cash_settlements(group_id, receiver_username):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, from_user, to_user, amount, payment_method, approval_status,
+               settlement_status, created_at
+        FROM settlements
+        WHERE group_id = ?
+          AND to_user = ?
+          AND payment_method = 'CASH'
+          AND approval_status = 'PENDING'
+          AND settlement_status = 'PENDING'
+        ORDER BY created_at DESC
+    """, (group_id, receiver_username))
+    rows = [dict(row) for row in c.fetchall()]
+    conn.close()
+    return rows
 
 
 # ============= HELPER FUNCTIONS =============
@@ -837,8 +1016,14 @@ def group_detail(group_id):
         for row in c.fetchall()
     ]
     
+    # Keep denormalized balances table in sync for UI/API consumers
+    refresh_group_balances(group_id)
+
     # Get settlement info
     settlements, balances = advanced_greedy_settlement(group_id)
+
+    # Cash approvals that require current user's action
+    pending_cash_requests = get_pending_cash_settlements(group_id, session['user_id'])
     
     conn.close()
     
@@ -846,7 +1031,8 @@ def group_detail(group_id):
                          group=group, 
                          expenses=expenses,
                          settlements=settlements,
-                         balances=balances)
+                         balances=balances,
+                         pending_cash_requests=pending_cash_requests)
 
 
 @app.route('/groups/create')
@@ -956,6 +1142,81 @@ def api_get_group(group_id):
         return {'error': 'Group not found'}, 404
     
     return {'group': group}, 200
+
+
+@app.route('/api/groups/<int:group_id>/member-suggestions', methods=['GET'])
+def api_group_member_suggestions(group_id):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+
+    query = request.args.get('q', '').strip()
+    current_user = session['user_id']
+
+    conn = get_db()
+    c = conn.cursor()
+
+    # Only group creator can add/search members for this group
+    c.execute("""
+        SELECT role FROM groups_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, current_user))
+
+    access = c.fetchone()
+    if not access or access['role'] != 'creator':
+        conn.close()
+        return {'error': 'Only group creator can add members'}, 403
+
+    # Exclude users already in the group
+    c.execute("""
+        SELECT user_id FROM groups_members
+        WHERE group_id = ? AND is_active = 1
+    """, (group_id,))
+    existing_members = {row['user_id'] for row in c.fetchall()}
+
+    search_pattern = f"%{query}%"
+    if query:
+        c.execute("""
+            SELECT username, full_name, profile_pic_url
+            FROM users
+            WHERE username != ?
+              AND (username LIKE ? OR full_name LIKE ?)
+            ORDER BY username
+            LIMIT 40
+        """, (current_user, search_pattern, search_pattern))
+    else:
+        c.execute("""
+            SELECT username, full_name, profile_pic_url
+            FROM users
+            WHERE username != ?
+            ORDER BY username
+            LIMIT 40
+        """, (current_user,))
+
+    all_users = c.fetchall()
+    conn.close()
+
+    friends = set(get_user_friends(current_user))
+
+    friend_results = []
+    non_friend_results = []
+    for user in all_users:
+        username = user['username']
+        if username in existing_members:
+            continue
+
+        item = {
+            'username': username,
+            'full_name': user['full_name'],
+            'profile_pic_url': user['profile_pic_url'],
+            'is_friend': username in friends
+        }
+
+        if item['is_friend']:
+            friend_results.append(item)
+        else:
+            non_friend_results.append(item)
+
+    return {'results': (friend_results + non_friend_results)[:20]}, 200
 
 
 @app.route('/api/groups/<int:group_id>/members', methods=['POST'])
@@ -1279,17 +1540,393 @@ def api_get_settlement(group_id):
     
     conn.close()
     
+    refresh_group_balances(group_id)
     settlements, balances = advanced_greedy_settlement(group_id)
+    pending_cash_requests = get_pending_cash_settlements(group_id, session['user_id'])
     
     return {
         'settlements': settlements,
-        'balances': balances
+        'balances': balances,
+        'pending_cash_requests': pending_cash_requests
+    }, 200
+
+
+@app.route('/api/groups/<int:group_id>/settlements/request-cash', methods=['POST'])
+def api_request_cash_settlement(group_id):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+
+    data = request.get_json() or {}
+    to_user = (data.get('to_user') or '').strip()
+    amount_raw = data.get('amount')
+
+    if not to_user:
+        return {'error': 'Missing receiver user'}, 400
+
+    try:
+        amount = round(float(amount_raw), 2)
+    except (TypeError, ValueError):
+        return {'error': 'Invalid amount'}, 400
+
+    if amount <= 0:
+        return {'error': 'Amount must be greater than zero'}, 400
+
+    from_user = session['user_id']
+    if from_user == to_user:
+        return {'error': 'You cannot settle with yourself'}, 400
+
+    conn = get_db()
+    c = conn.cursor()
+
+    # Verify requester and receiver are active group members
+    c.execute("""
+        SELECT user_id FROM groups_members WHERE group_id = ? AND user_id = ? AND is_active = 1
+    """, (group_id, from_user))
+    if not c.fetchone():
+        conn.close()
+        return {'error': 'Access denied'}, 403
+
+    c.execute("""
+        SELECT user_id FROM groups_members WHERE group_id = ? AND user_id = ? AND is_active = 1
+    """, (group_id, to_user))
+    if not c.fetchone():
+        conn.close()
+        return {'error': 'Receiver is not in this group'}, 400
+
+    balances = calculate_group_balances(group_id)
+    from_balance = balances.get(from_user, 0)
+    to_balance = balances.get(to_user, 0)
+    max_settle = round(min(max(-from_balance, 0), max(to_balance, 0)), 2)
+
+    if max_settle <= 0:
+        conn.close()
+        return {'error': 'No payable balance found for this pair'}, 400
+
+    if amount - max_settle > 0.01:
+        conn.close()
+        return {'error': f'Amount exceeds payable limit ({max_settle:.2f})'}, 400
+
+    try:
+        c.execute("""
+            INSERT INTO settlements (
+                group_id, from_user, to_user, amount, payment_method,
+                approval_status, settlement_status
+            ) VALUES (?, ?, ?, ?, 'CASH', 'PENDING', 'PENDING')
+        """, (group_id, from_user, to_user, amount))
+        settlement_id = c.lastrowid
+
+        pending_tx_id = generate_pending_transaction_id()
+        c.execute("""
+            INSERT INTO payments (
+                transaction_id, group_id, settlement_id,
+                from_user, to_user, payer_id, payee_id,
+                amount, payment_method, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CASH', 'PENDING')
+        """, (pending_tx_id, group_id, settlement_id, from_user, to_user, from_user, to_user, amount))
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return {'error': f'Cash request failed: {str(e)}'}, 500
+
+    return {
+        'success': True,
+        'message': f'Cash settlement request sent to {to_user}',
+        'settlement_id': settlement_id
+    }, 201
+
+
+@app.route('/api/groups/<int:group_id>/settlements/<int:settlement_id>/approve-cash', methods=['POST'])
+def api_approve_cash_settlement(group_id, settlement_id):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+
+    approver = session['user_id']
+    conn = get_db()
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT id, from_user, to_user, amount, payment_method, approval_status, settlement_status
+        FROM settlements
+        WHERE id = ? AND group_id = ?
+    """, (settlement_id, group_id))
+    settlement = c.fetchone()
+
+    if not settlement:
+        conn.close()
+        return {'error': 'Settlement not found'}, 404
+
+    if settlement['payment_method'] != 'CASH':
+        conn.close()
+        return {'error': 'This endpoint only approves CASH settlements'}, 400
+
+    if settlement['to_user'] != approver:
+        conn.close()
+        return {'error': 'Only receiver can approve cash payments'}, 403
+
+    if settlement['approval_status'] != 'PENDING' or settlement['settlement_status'] != 'PENDING':
+        conn.close()
+        return {'error': 'Settlement is not pending approval'}, 400
+
+    try:
+        transaction_id = generate_transaction_id()
+
+        c.execute("""
+            UPDATE settlements
+            SET approval_status = 'APPROVED', settlement_status = 'COMPLETED', updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (settlement_id,))
+
+        c.execute("""
+            UPDATE payments
+            SET status = 'COMPLETED', transaction_id = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE settlement_id = ?
+        """, (transaction_id, settlement_id))
+
+        # In case payment record was not created, create a completed one.
+        if c.rowcount == 0:
+            c.execute("""
+                INSERT INTO payments (
+                    transaction_id, group_id, settlement_id,
+                    from_user, to_user, payer_id, payee_id,
+                    amount, payment_method, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CASH', 'COMPLETED')
+            """, (
+                transaction_id,
+                group_id,
+                settlement_id,
+                settlement['from_user'],
+                settlement['to_user'],
+                settlement['from_user'],
+                settlement['to_user'],
+                settlement['amount']
+            ))
+
+        create_ledger_transaction(
+            transaction_id,
+            group_id,
+            settlement['from_user'],
+            settlement['to_user'],
+            settlement['amount'],
+            'CASH',
+            conn=conn
+        )
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return {'error': f'Cash approval failed: {str(e)}'}, 500
+
+    refresh_group_balances(group_id)
+
+    return {
+        'success': True,
+        'message': 'Cash payment approved and settled',
+        'transaction_id': transaction_id
+    }, 200
+
+
+@app.route('/api/groups/<int:group_id>/settlements/initiate-upi', methods=['POST'])
+def api_initiate_upi_settlement(group_id):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+
+    data = request.get_json() or {}
+    to_user = (data.get('to_user') or '').strip()
+    amount_raw = data.get('amount')
+    upi_ref = (data.get('upi_ref') or '').strip()
+
+    if not to_user:
+        return {'error': 'Missing receiver user'}, 400
+
+    try:
+        amount = round(float(amount_raw), 2)
+    except (TypeError, ValueError):
+        return {'error': 'Invalid amount'}, 400
+
+    if amount <= 0:
+        return {'error': 'Amount must be greater than zero'}, 400
+
+    from_user = session['user_id']
+    if from_user == to_user:
+        return {'error': 'You cannot settle with yourself'}, 400
+
+    conn = get_db()
+    c = conn.cursor()
+
+    c.execute("SELECT currency FROM groups WHERE group_id = ?", (group_id,))
+    group_row = c.fetchone()
+    if not group_row:
+        conn.close()
+        return {'error': 'Group not found'}, 404
+    if group_row['currency'] != 'INR':
+        conn.close()
+        return {'error': 'UPI is available only for INR groups'}, 400
+
+    c.execute("""
+        SELECT user_id FROM groups_members WHERE group_id = ? AND user_id = ? AND is_active = 1
+    """, (group_id, from_user))
+    if not c.fetchone():
+        conn.close()
+        return {'error': 'Access denied'}, 403
+
+    c.execute("""
+        SELECT gm.user_id, u.full_name, u.upi_id
+        FROM groups_members gm
+        JOIN users u ON u.username = gm.user_id
+        WHERE gm.group_id = ? AND gm.user_id = ? AND gm.is_active = 1
+    """, (group_id, to_user))
+    receiver = c.fetchone()
+    if not receiver:
+        conn.close()
+        return {'error': 'Receiver is not in this group'}, 400
+
+    balances = calculate_group_balances(group_id)
+    from_balance = balances.get(from_user, 0)
+    to_balance = balances.get(to_user, 0)
+    max_settle = round(min(max(-from_balance, 0), max(to_balance, 0)), 2)
+
+    if max_settle <= 0:
+        conn.close()
+        return {'error': 'No payable balance found for this pair'}, 400
+
+    if amount - max_settle > 0.01:
+        conn.close()
+        return {'error': f'Amount exceeds payable limit ({max_settle:.2f})'}, 400
+
+    try:
+        c.execute("""
+            INSERT INTO settlements (
+                group_id, from_user, to_user, amount, payment_method,
+                approval_status, settlement_status
+            ) VALUES (?, ?, ?, ?, 'UPI', 'APPROVED', 'PENDING')
+        """, (group_id, from_user, to_user, amount))
+        settlement_id = c.lastrowid
+
+        pending_tx_id = generate_pending_transaction_id()
+        c.execute("""
+            INSERT INTO payments (
+                transaction_id, group_id, settlement_id,
+                from_user, to_user, payer_id, payee_id,
+                amount, payment_method, upi_transaction_ref, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'UPI', ?, 'PENDING')
+        """, (pending_tx_id, group_id, settlement_id, from_user, to_user, from_user, to_user, amount, upi_ref or None))
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return {'error': f'UPI initiation failed: {str(e)}'}, 500
+
+    return {
+        'success': True,
+        'message': 'UPI payment initiated. Confirm to complete settlement.',
+        'settlement_id': settlement_id,
+        'receiver_upi_id': receiver['upi_id'],
+        'receiver_name': receiver['full_name']
+    }, 201
+
+
+@app.route('/api/groups/<int:group_id>/settlements/<int:settlement_id>/confirm-upi', methods=['POST'])
+def api_confirm_upi_settlement(group_id, settlement_id):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+
+    current_user = session['user_id']
+    data = request.get_json() or {}
+    upi_ref = (data.get('upi_ref') or '').strip()
+
+    conn = get_db()
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT id, from_user, to_user, amount, payment_method, settlement_status
+        FROM settlements
+        WHERE id = ? AND group_id = ?
+    """, (settlement_id, group_id))
+    settlement = c.fetchone()
+
+    if not settlement:
+        conn.close()
+        return {'error': 'Settlement not found'}, 404
+
+    if settlement['payment_method'] != 'UPI':
+        conn.close()
+        return {'error': 'This endpoint only confirms UPI settlements'}, 400
+
+    if settlement['from_user'] != current_user:
+        conn.close()
+        return {'error': 'Only debtor can confirm UPI payment'}, 403
+
+    if settlement['settlement_status'] != 'PENDING':
+        conn.close()
+        return {'error': 'Settlement already completed'}, 400
+
+    transaction_id = generate_transaction_id()
+
+    c.execute("""
+        UPDATE settlements
+        SET settlement_status = 'COMPLETED', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (settlement_id,))
+
+    c.execute("""
+        UPDATE payments
+        SET status = 'COMPLETED', transaction_id = ?,
+            upi_transaction_ref = COALESCE(?, upi_transaction_ref),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE settlement_id = ?
+    """, (transaction_id, upi_ref or None, settlement_id))
+
+    if c.rowcount == 0:
+        c.execute("""
+            INSERT INTO payments (
+                transaction_id, group_id, settlement_id,
+                from_user, to_user, payer_id, payee_id,
+                amount, payment_method, upi_transaction_ref, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'UPI', ?, 'COMPLETED')
+        """, (
+            transaction_id,
+            group_id,
+            settlement_id,
+            settlement['from_user'],
+            settlement['to_user'],
+            settlement['from_user'],
+            settlement['to_user'],
+            settlement['amount'],
+            upi_ref or None
+        ))
+
+    create_ledger_transaction(
+        transaction_id,
+        group_id,
+        settlement['from_user'],
+        settlement['to_user'],
+        settlement['amount'],
+        'UPI',
+        conn=conn
+    )
+
+    conn.commit()
+    conn.close()
+
+    refresh_group_balances(group_id)
+
+    return {
+        'success': True,
+        'message': 'UPI payment confirmed and settlement completed',
+        'transaction_id': transaction_id
     }, 200
 
 
 @app.route('/api/groups/<int:group_id>/transactions', methods=['GET'])
 def api_get_transactions(group_id):
-    """Get all transactions (ledger) for a group with user details"""
+    """Get immutable settlement transactions for a group with user details."""
     if 'user_id' not in session:
         return {'error': 'Not logged in'}, 401
     
@@ -1306,24 +1943,31 @@ def api_get_transactions(group_id):
         conn.close()
         return {'error': 'Access denied'}, 403
     
-    # Get all transactions with user details
+    # Get hash-chained ledger transactions with user details (compatible with legacy schema)
     c.execute("""
-        SELECT t.id, t.expense_id, t.payer_id, t.payee_id, t.amount, t.status, t.timestamp,
-               payer.full_name as payer_name, payee.full_name as payee_name,
-               e.name as expense_name
-        FROM transactions t
-        JOIN users payer ON t.payer_id = payer.username
-        JOIN users payee ON t.payee_id = payee.username
-        LEFT JOIN expenses e ON t.expense_id = e.id
-        WHERE t.group_id = ?
-        ORDER BY t.timestamp DESC
+        SELECT lt.id,
+               lt.from_user as payer_id,
+               lt.to_user as payee_id,
+               lt.amount,
+               'COMPLETED' as status,
+               lt.timestamp as timestamp,
+               lt.payment_method,
+               lt.tx_id as transaction_id,
+               lt.previous_hash,
+               lt.hash as current_hash,
+               payer.full_name as payer_name,
+               payee.full_name as payee_name
+        FROM ledger_transactions lt
+        JOIN users payer ON lt.from_user = payer.username
+        JOIN users payee ON lt.to_user = payee.username
+        WHERE lt.group_id = ?
+        ORDER BY lt.timestamp DESC
     """, (group_id,))
     
     transactions = []
     for row in c.fetchall():
         transactions.append({
             'id': row['id'],
-            'expense_id': row['expense_id'],
             'payer_id': row['payer_id'],
             'payer_name': row['payer_name'],
             'payee_id': row['payee_id'],
@@ -1331,11 +1975,44 @@ def api_get_transactions(group_id):
             'amount': row['amount'],
             'status': row['status'],
             'timestamp': row['timestamp'],
-            'expense_name': row['expense_name']
+            'payment_method': row['payment_method'],
+            'transaction_id': row['transaction_id'],
+            'previous_hash': row['previous_hash'],
+            'current_hash': row['current_hash']
         })
     
     conn.close()
     return {'transactions': transactions}, 200
+
+
+@app.route('/ledger')
+def ledger_page():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+
+    conn = get_db()
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT lt.id, lt.group_id, g.group_name as group_name,
+               lt.from_user, fu.full_name as from_name,
+               lt.to_user, tu.full_name as to_name,
+               lt.amount, lt.payment_method, lt.tx_id as transaction_id,
+               'COMPLETED' as status, lt.previous_hash, lt.hash as current_hash,
+               lt.timestamp as created_at
+        FROM ledger_transactions lt
+        JOIN groups g ON lt.group_id = g.group_id
+        JOIN users fu ON lt.from_user = fu.username
+        JOIN users tu ON lt.to_user = tu.username
+        JOIN groups_members gm ON gm.group_id = lt.group_id
+        WHERE gm.user_id = ? AND gm.is_active = 1
+        ORDER BY lt.timestamp DESC
+    """, (session['user_id'],))
+
+    ledger_entries = [dict(row) for row in c.fetchall()]
+    conn.close()
+
+    return render_template('ledger.html', ledger_entries=ledger_entries)
 
 
 @app.route('/api/groups/<token>/join', methods=['POST'])
