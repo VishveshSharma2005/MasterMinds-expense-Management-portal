@@ -4,6 +4,25 @@
 
 {% block content %}
 <div class="container" style="max-width: 600px; margin: 2rem auto;">
+    <div id="floatingToast" style="
+        position: fixed;
+        top: 1.25rem;
+        right: 1.25rem;
+        min-width: 260px;
+        max-width: 360px;
+        padding: 0.85rem 1rem;
+        border-radius: 0.6rem;
+        color: #fff;
+        font-weight: 600;
+        box-shadow: 0 12px 24px rgba(0,0,0,0.16);
+        z-index: 2200;
+        opacity: 0;
+        transform: translateY(-12px);
+        pointer-events: none;
+        transition: opacity 0.25s ease, transform 0.25s ease;
+        background: linear-gradient(135deg, #16a34a, #15803d);
+    " aria-live="polite"></div>
+
     <!-- Header -->
     <div style="text-align: center; margin-bottom: 2rem;">
         <h1 style="margin: 0; font-size: 2rem; font-weight: 600;">Create Group</h1>
@@ -201,6 +220,24 @@
 </div>
 
 <script>
+function showToast(message, type = 'success') {
+    const toast = document.getElementById('floatingToast');
+    if (!toast) return;
+
+    toast.textContent = message;
+    toast.style.background = type === 'error'
+        ? 'linear-gradient(135deg, #ef4444, #dc2626)'
+        : 'linear-gradient(135deg, #16a34a, #15803d)';
+    toast.style.opacity = '1';
+    toast.style.transform = 'translateY(0)';
+
+    window.clearTimeout(window.__createGroupToastTimer);
+    window.__createGroupToastTimer = window.setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(-12px)';
+    }, 3200);
+}
+
 document.getElementById('createGroupForm').onsubmit = function(e) {
     e.preventDefault();
     
@@ -212,7 +249,7 @@ document.getElementById('createGroupForm').onsubmit = function(e) {
         .map(cb => cb.value);
     
     if (!groupName) {
-        alert('Group name is required');
+        showToast('Group name is required.', 'error');
         return;
     }
     
@@ -229,15 +266,17 @@ document.getElementById('createGroupForm').onsubmit = function(e) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert('Group created successfully!');
-            window.location.href = `/groups/${data.group_id}`;
+            showToast('Group created successfully.', 'success');
+            setTimeout(() => {
+                window.location.href = `/groups/${data.group_id}`;
+            }, 900);
         } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
+            showToast(data.error || 'Unable to create group right now.', 'error');
         }
     })
     .catch(error => {
         console.error('Error:', error);
-        alert('An error occurred while creating the group');
+        showToast('An error occurred while creating the group.', 'error');
     });
 };
 </script>

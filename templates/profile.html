@@ -1,0 +1,146 @@
+{% extends 'base.html' %}
+
+{% block title %}Profile | MasterMinds{% endblock %}
+
+{% block content %}
+<div class="profile-page">
+    <div class="page-header profile-page-header">
+        <div>
+            <h1 class="page-title">My Profile</h1>
+            <p class="profile-page-subtitle">Your account details, activity and settlement snapshot.</p>
+        </div>
+        <a href="{{ url_for('logout') }}" class="btn btn-danger profile-logout-btn">Logout</a>
+    </div>
+
+    <div class="profile-layout-grid">
+        <aside class="card section profile-sidebar-card">
+            <div class="profile-avatar-wrap">
+                {% if user['profile_pic_url'] %}
+                    <img src="{{ user['profile_pic_url'] }}" alt="{{ user['full_name'] }}" class="profile-avatar">
+                {% else %}
+                    <div class="profile-avatar-fallback">{{ user['full_name'][0] }}</div>
+                {% endif %}
+            </div>
+
+            <div class="profile-identity">
+                <div class="profile-name">{{ user['full_name'] }}</div>
+                <div class="profile-username">@{{ user['username'] }}</div>
+            </div>
+
+            <form action="{{ url_for('update_profile_picture') }}" method="post" enctype="multipart/form-data" class="profile-upload-form">
+                <label for="profilePic">Update profile photo</label>
+                <input id="profilePic" name="profile_pic" type="file" accept=".png,.jpg,.jpeg,.gif" class="input-file">
+                <button type="submit" class="btn btn-primary">Upload Photo</button>
+            </form>
+
+            <div class="profile-meta-grid">
+                <div><strong>Email:</strong> {{ user['email'] }}</div>
+                <div><strong>Phone:</strong> {{ user['phone_number'] }}</div>
+                <div><strong>UPI ID:</strong> {{ user['upi_id'] }}</div>
+                <div><strong>Created:</strong> {{ user['created_at'] }}</div>
+                <div><strong>Updated:</strong> {{ user['last_updated'] if user['last_updated'] else 'Never' }}</div>
+            </div>
+        </aside>
+
+        <section class="profile-main-column">
+            <div class="stats-grid profile-stats-grid">
+                <div class="card stats-card profile-stats-card tone-danger">
+                    <p class="stats-label">Total You Need To Pay</p>
+                    <p class="stats-value profile-stat-danger">Rs {{ "%.2f"|format(total_payable) }}</p>
+                </div>
+                <div class="card stats-card profile-stats-card tone-success">
+                    <p class="stats-label">Total You Will Get</p>
+                    <p class="stats-value profile-stat-success">Rs {{ "%.2f"|format(total_receivable) }}</p>
+                </div>
+                <div class="card stats-card profile-stats-card tone-primary">
+                    <p class="stats-label">Friends</p>
+                    <p class="stats-value profile-stat-primary">{{ friends|length }}</p>
+                </div>
+            </div>
+
+            <div class="card section profile-panel">
+                <h2 class="section-title">Recent Groups (by your activity)</h2>
+                {% if recent_groups %}
+                    <div class="profile-group-grid">
+                        {% for group in recent_groups %}
+                            <a href="{{ url_for('group_detail', group_id=group['group_id']) }}" class="profile-group-tile">
+                                <div class="profile-group-name">{{ group['group_name'] }}</div>
+                                <div class="profile-group-meta">{{ group['currency'] }} • Last active {{ group['last_activity'] }}</div>
+                            </a>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <p class="empty">No group activity yet.</p>
+                {% endif %}
+            </div>
+
+            <div class="profile-dual-grid">
+                <div class="card section profile-panel">
+                    <h2 class="section-title">Friends</h2>
+                    {% if friends %}
+                        <div class="profile-list-grid">
+                            {% for friend in friends %}
+                                <div class="profile-list-row">
+                                    <div class="profile-list-user">
+                                        {% if friend['profile_pic_url'] %}
+                                            <img src="{{ friend['profile_pic_url'] }}" alt="{{ friend['full_name'] }}" class="profile-mini-avatar">
+                                        {% else %}
+                                            <div class="profile-mini-fallback">{{ friend['full_name'][0] }}</div>
+                                        {% endif %}
+                                        <div>
+                                            <div class="profile-list-name">{{ friend['full_name'] }}</div>
+                                            <div class="profile-list-sub">@{{ friend['username'] }}</div>
+                                        </div>
+                                    </div>
+                                    <div class="profile-list-time">{{ friend['created_at'] }}</div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <p class="empty">No friends yet. Add friends from the Friends page.</p>
+                    {% endif %}
+                </div>
+
+                <div class="card section profile-panel">
+                    <h2 class="section-title">Recent Transactions</h2>
+                    {% if recent_transactions %}
+                        <div class="profile-list-grid profile-scroll-region">
+                            {% for tx in recent_transactions %}
+                                {% set you_paid = tx['from_user'] == user['username'] %}
+                                {% set settled = tx['settlement_status'] == 'COMPLETED' %}
+                                <div class="profile-list-row">
+                                    <div class="profile-tx-head">
+                                        <div class="profile-list-name">{{ tx['group_name'] }}</div>
+                                        {% if settled %}
+                                        <span class="profile-pill profile-pill-ok">
+                                            {{ tx['settlement_status'] }}
+                                        </span>
+                                        {% else %}
+                                        <span class="profile-pill profile-pill-pending">
+                                            {{ tx['settlement_status'] }}
+                                        </span>
+                                        {% endif %}
+                                    </div>
+                                    <div class="profile-tx-sub">
+                                        {{ tx['from_user'] }} paid {{ tx['to_user'] }} via {{ tx['payment_method'] }}
+                                    </div>
+                                    <div class="profile-tx-foot">
+                                        {% if you_paid %}
+                                        <strong class="profile-amt-out">Rs {{ "%.2f"|format(tx['amount']) }}</strong>
+                                        {% else %}
+                                        <strong class="profile-amt-in">Rs {{ "%.2f"|format(tx['amount']) }}</strong>
+                                        {% endif %}
+                                        <span class="profile-list-sub">{{ tx['tx_time'] }}</span>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <p class="empty">No transactions yet.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </section>
+    </div>
+</div>
+{% endblock %}

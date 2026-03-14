@@ -147,6 +147,7 @@
                 <div style="text-align: right;">
                     <div style="font-size: 1.3rem; font-weight: 600; color: #333;">{{ group.currency }} {{ "%.2f"|format(expense.amount) }}</div>
                     <div style="margin-top: 0.5rem;">
+                        {% if expense.paid_by == session.get('user_id') %}
                         <button onclick="deleteExpense({{ group.group_id }}, {{ expense.id }})" style="
                             background: #f44336;
                             color: white;
@@ -158,6 +159,7 @@
                         ">
                             Delete
                         </button>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -748,6 +750,11 @@ function switchTab(tabName) {
     if (tabName === 'ledger') {
         loadLedgerData();
     }
+}
+
+const initialTab = new URLSearchParams(window.location.search).get('tab');
+if (initialTab && document.querySelector(`[data-tab="${initialTab}"]`)) {
+    switchTab(initialTab);
 }
 
 function openAddExpenseModal(groupId) {

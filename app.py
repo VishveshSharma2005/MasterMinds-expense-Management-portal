@@ -223,6 +223,26 @@ def init_db():
             FOREIGN KEY (group_id) REFERENCES groups(group_id)
         )
     ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            notification_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            message TEXT,
+            link TEXT,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            group_id INTEGER,
+            related_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(username),
+            FOREIGN KEY (group_id) REFERENCES groups(group_id)
+        )
+    ''')
+    c.execute('''
+        CREATE INDEX IF NOT EXISTS idx_notifications_user_read_created
+        ON notifications(user_id, is_read, created_at DESC)
+    ''')
     
     # Migration: Add missing amount_owed column if it doesn't exist
     try:
@@ -433,6 +453,59 @@ def create_ledger_transaction(tx_id, group_id, from_user, to_user, amount, payme
     }
 
 
+def create_notification(user_id, notification_type, title, message='', link=None, group_id=None, related_id=None, conn=None):
+    """Create a notification for a user. Reuses an open transaction when conn is provided."""
+    owns_connection = conn is None
+    if owns_connection:
+        conn = get_db()
+
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO notifications (
+            user_id, notification_type, title, message, link, group_id, related_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        user_id,
+        notification_type,
+        title,
+        message,
+        link,
+        group_id,
+        related_id
+    ))
+
+    if owns_connection:
+        conn.commit()
+        conn.close()
+
+
+def format_notification_time(timestamp_str):
+    """Convert timestamp string to a lightweight readable format for panel display."""
+    if not timestamp_str:
+        return ''
+
+    try:
+        ts = datetime.fromisoformat(str(timestamp_str).replace('Z', '+00:00'))
+        now = datetime.now(ts.tzinfo) if ts.tzinfo else datetime.now()
+        diff = now - ts
+        seconds = int(diff.total_seconds())
+
+        if seconds < 60:
+            return 'just now'
+        if seconds < 3600:
+            minutes = seconds // 60
+            return f"{minutes} min ago"
+        if seconds < 86400:
+            hours = seconds // 3600
+            return f"{hours} hr ago"
+        if seconds < 7 * 86400:
+            days = seconds // 86400
+            return f"{days} day ago" if days == 1 else f"{days} days ago"
+        return ts.strftime('%d %b %Y')
+    except Exception:
+        return str(timestamp_str)
+
+
 # ==================== GROUP HELPER FUNCTIONS ====================
 def generate_invite_token():
     """Generate unique invite token"""
@@ -626,6 +699,16 @@ def send_friend_request(sender, receiver):
             INSERT INTO friend_requests (sender_name, receiver_name, status, created_at)
             VALUES (?, ?, 'pending', ?)
         ''', (sender, receiver, datetime.now()))
+
+        create_notification(
+            receiver,
+            'friend_request',
+            'New friend request',
+            f"{sender} sent you a friend request.",
+            link='/friends',
+            conn=conn
+        )
+
         conn.commit()
         conn.close()
         return True
@@ -816,6 +899,166 @@ def dashboard():
     return render_template('dashboard.html', user=user)
 
 
+@app.route('/profile')
+def profile():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+
+    username = session['user_id']
+    conn = get_db()
+    c = conn.cursor()
+
+    c.execute('SELECT * FROM users WHERE username = ?', (username,))
+    user = c.fetchone()
+    if not user:
+        conn.close()
+        flash('User profile not found.', 'error')
+        return redirect(url_for('dashboard'))
+
+    # Friends list
+    c.execute('''
+        SELECT u.username, u.full_name, u.profile_pic_url, f.created_at
+        FROM friends f
+        JOIN users u ON f.friend_name = u.username
+        WHERE f.user_name = ?
+        ORDER BY f.created_at DESC
+        LIMIT 8
+    ''', (username,))
+    friends = [dict(row) for row in c.fetchall()]
+
+    # Recent groups by user's activity (expenses/splits/settlements)
+    c.execute('''
+        SELECT
+            g.group_id,
+            g.group_name,
+            g.currency,
+            COALESCE(activity.last_activity, g.updated_at, g.created_at) AS last_activity
+        FROM groups g
+        JOIN groups_members gm
+            ON gm.group_id = g.group_id
+           AND gm.user_id = ?
+           AND gm.is_active = 1
+        LEFT JOIN (
+            SELECT group_id, MAX(activity_at) AS last_activity
+            FROM (
+                SELECT e.group_id, e.created_at AS activity_at
+                FROM expenses e
+                WHERE e.paid_by = ?
+
+                UNION ALL
+
+                SELECT e.group_id, e.created_at AS activity_at
+                FROM expense_splits es
+                JOIN expenses e ON e.id = es.expense_id
+                WHERE es.user_id = ?
+
+                UNION ALL
+
+                SELECT s.group_id, COALESCE(s.updated_at, s.created_at) AS activity_at
+                FROM settlements s
+                WHERE s.from_user = ? OR s.to_user = ?
+            ) user_activity
+            GROUP BY group_id
+        ) activity ON activity.group_id = g.group_id
+        ORDER BY COALESCE(activity.last_activity, g.updated_at, g.created_at) DESC
+        LIMIT 6
+    ''', (username, username, username, username, username))
+    recent_groups = [dict(row) for row in c.fetchall()]
+
+    # Recent transactions (sent + received) across all groups
+    c.execute('''
+        SELECT
+            s.id AS settlement_id,
+            s.group_id,
+            g.group_name,
+            s.from_user,
+            s.to_user,
+            s.amount,
+            s.payment_method,
+            s.approval_status,
+            s.settlement_status,
+            COALESCE(s.updated_at, s.created_at) AS tx_time
+        FROM settlements s
+        JOIN groups g ON g.group_id = s.group_id
+        JOIN groups_members gm
+            ON gm.group_id = s.group_id
+           AND gm.user_id = ?
+           AND gm.is_active = 1
+        WHERE s.from_user = ? OR s.to_user = ?
+        ORDER BY COALESCE(s.updated_at, s.created_at) DESC
+        LIMIT 10
+    ''', (username, username, username))
+    recent_transactions = [dict(row) for row in c.fetchall()]
+
+    # Aggregate totals from current balances across all groups
+    c.execute('''
+        SELECT DISTINCT group_id
+        FROM groups_members
+        WHERE user_id = ? AND is_active = 1
+    ''', (username,))
+    user_group_ids = [row['group_id'] for row in c.fetchall()]
+
+    conn.close()
+
+    total_payable = 0.0
+    total_receivable = 0.0
+    for gid in user_group_ids:
+        balances = calculate_group_balances(gid)
+        user_balance = balances.get(username, 0.0)
+        if user_balance < 0:
+            total_payable += abs(user_balance)
+        elif user_balance > 0:
+            total_receivable += user_balance
+
+    return render_template(
+        'profile.html',
+        user=user,
+        friends=friends,
+        recent_groups=recent_groups,
+        recent_transactions=recent_transactions,
+        total_payable=round(total_payable, 2),
+        total_receivable=round(total_receivable, 2)
+    )
+
+
+@app.route('/profile/picture', methods=['POST'])
+def update_profile_picture():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+
+    if 'profile_pic' not in request.files:
+        flash('Please choose an image file.', 'error')
+        return redirect(url_for('profile'))
+
+    file = request.files['profile_pic']
+    if not file or file.filename == '':
+        flash('Please choose an image file.', 'error')
+        return redirect(url_for('profile'))
+
+    if not allowed_file(file.filename):
+        flash('Invalid file type. Use png, jpg, jpeg, or gif.', 'error')
+        return redirect(url_for('profile'))
+
+    safe_name = secure_filename(file.filename)
+    unique_name = f"{session['user_id']}_{int(datetime.now().timestamp())}_{safe_name}"
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_name)
+    file.save(file_path)
+    profile_pic_url = f"/uploads/{unique_name}"
+
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('''
+        UPDATE users
+        SET profile_pic_url = ?, last_updated = CURRENT_TIMESTAMP
+        WHERE username = ?
+    ''', (profile_pic_url, session['user_id']))
+    conn.commit()
+    conn.close()
+
+    flash('Profile picture updated successfully.', 'success')
+    return redirect(url_for('profile'))
+
+
 @app.route('/logout')
 def logout():
     session.clear()
@@ -972,6 +1215,140 @@ def get_friends_api():
     return {'friends': friends_list}, 200
 
 
+@app.route('/api/notifications', methods=['GET'])
+def api_get_notifications():
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+
+    limit_raw = request.args.get('limit', 15)
+    try:
+        limit = max(1, min(int(limit_raw), 50))
+    except (TypeError, ValueError):
+        limit = 15
+
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, notification_type, title, message, link, is_read, created_at
+        FROM notifications
+        WHERE user_id = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+    """, (session['user_id'], limit))
+    rows = c.fetchall()
+
+    notifications = []
+    unread_ids = []
+    for row in rows:
+        notifications.append({
+            'id': row['id'],
+            'type': row['notification_type'],
+            'title': row['title'],
+            'message': row['message'] or '',
+            'link': row['link'] or '',
+            'is_read': bool(row['is_read']),
+            'created_at': row['created_at'],
+            'created_label': format_notification_time(row['created_at'])
+        })
+        if not row['is_read']:
+            unread_ids.append(row['id'])
+
+    c.execute("""
+        SELECT COUNT(*) AS unread_count
+        FROM notifications
+        WHERE user_id = ? AND is_read = 0
+    """, (session['user_id'],))
+    unread_count = c.fetchone()['unread_count']
+
+    conn.close()
+
+    return {
+        'notifications': notifications,
+        'unread_count': unread_count,
+        'unread_ids': unread_ids
+    }, 200
+
+
+@app.route('/api/notifications/count', methods=['GET'])
+def api_notifications_count():
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""
+        SELECT COUNT(*) AS unread_count
+        FROM notifications
+        WHERE user_id = ? AND is_read = 0
+    """, (session['user_id'],))
+    unread_count = c.fetchone()['unread_count']
+    conn.close()
+
+    return {'unread_count': unread_count}, 200
+
+
+@app.route('/api/notifications/read-all', methods=['POST'])
+def api_notifications_read_all():
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""
+        UPDATE notifications
+        SET is_read = 1
+        WHERE user_id = ? AND is_read = 0
+    """, (session['user_id'],))
+    updated = c.rowcount
+    conn.commit()
+    conn.close()
+
+    return {'updated': updated}, 200
+
+
+@app.route('/api/notifications/read-visible', methods=['POST'])
+def api_notifications_read_visible():
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+
+    data = request.get_json() or {}
+    ids = data.get('ids', [])
+
+    if not isinstance(ids, list) or len(ids) == 0:
+        return {'updated': 0}, 200
+
+    valid_ids = []
+    for notification_id in ids:
+        try:
+            valid_ids.append(int(notification_id))
+        except (TypeError, ValueError):
+            continue
+
+    if not valid_ids:
+        return {'updated': 0}, 200
+
+    placeholders = ','.join(['?'] * len(valid_ids))
+    params = [session['user_id']] + valid_ids
+
+    conn = get_db()
+    c = conn.cursor()
+    c.execute(
+        f"""
+        UPDATE notifications
+        SET is_read = 1
+        WHERE user_id = ?
+          AND is_read = 0
+          AND id IN ({placeholders})
+        """,
+        params
+    )
+    updated = c.rowcount
+    conn.commit()
+    conn.close()
+
+    return {'updated': updated}, 200
+
+
 # ============= GROUP ROUTES =============
 
 @app.route('/groups')
@@ -1113,6 +1490,16 @@ def api_create_group():
                         INSERT INTO groups_members (group_id, user_id, role, is_active)
                         VALUES (?, ?, 'member', 1)
                     """, (group_id, member_username))
+
+                    create_notification(
+                        member_username,
+                        'added_to_group',
+                        'You were added to a group',
+                        f"{session['user_id']} added you to '{group_name}'.",
+                        link=f'/groups/{group_id}',
+                        group_id=group_id,
+                        conn=conn
+                    )
                 except sqlite3.IntegrityError:
                     pass  # Skip if user already in group
         
@@ -1249,12 +1636,27 @@ def api_add_group_member(group_id):
     if not c.fetchone():
         conn.close()
         return {'error': 'User not found'}, 404
+
+    c.execute("SELECT group_name FROM groups WHERE group_id = ?", (group_id,))
+    group_row = c.fetchone()
+    group_name = group_row['group_name'] if group_row else 'a group'
     
     try:
         c.execute("""
             INSERT INTO groups_members (group_id, user_id, role, is_active)
             VALUES (?, ?, 'member', 1)
         """, (group_id, username))
+
+        create_notification(
+            username,
+            'added_to_group',
+            'You were added to a group',
+            f"{session['user_id']} added you to '{group_name}'.",
+            link=f'/groups/{group_id}',
+            group_id=group_id,
+            conn=conn
+        )
+
         conn.commit()
         conn.close()
         
@@ -1432,6 +1834,20 @@ def api_create_expense(group_id):
                             INSERT INTO transactions (group_id, expense_id, payer_id, payee_id, amount, status)
                             VALUES (?, ?, ?, ?, ?, 'PENDING')
                         """, (group_id, expense_id, member, session['user_id'], split_amount))
+
+        for member in members:
+            if member == session['user_id']:
+                continue
+            create_notification(
+                member,
+                'new_group_expense',
+                'New group expense added',
+                f"{session['user_id']} added '{name}' ({amount:.2f}) in your group.",
+                link=f'/groups/{group_id}',
+                group_id=group_id,
+                related_id=expense_id,
+                conn=conn
+            )
         
         conn.commit()
         conn.close()
@@ -1476,6 +1892,10 @@ def api_delete_expense(group_id, expense_id):
     if not expense:
         conn.close()
         return {'error': 'Expense not found'}, 404
+
+    if expense['paid_by'] != session['user_id']:
+        conn.close()
+        return {'error': 'Only the expense creator can delete this expense'}, 403
     
     try:
         # Delete splits
@@ -1624,6 +2044,17 @@ def api_request_cash_settlement(group_id):
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CASH', 'PENDING')
         """, (pending_tx_id, group_id, settlement_id, from_user, to_user, from_user, to_user, amount))
 
+        create_notification(
+            to_user,
+            'cash_approval_request',
+            'Cash payment approval needed',
+            f"{from_user} marked Rs {amount:.2f} as paid in cash. Please approve.",
+            link=f'/groups/{group_id}?tab=settlement',
+            group_id=group_id,
+            related_id=settlement_id,
+            conn=conn
+        )
+
         conn.commit()
         conn.close()
     except Exception as e:
@@ -1711,6 +2142,17 @@ def api_approve_cash_settlement(group_id, settlement_id):
             settlement['to_user'],
             settlement['amount'],
             'CASH',
+            conn=conn
+        )
+
+        create_notification(
+            settlement['from_user'],
+            'cash_approved',
+            'Cash payment approved',
+            f"{approver} approved your cash settlement of Rs {settlement['amount']:.2f}.",
+            link=f'/groups/{group_id}?tab=ledger',
+            group_id=group_id,
+            related_id=settlement_id,
             conn=conn
         )
 
@@ -1909,6 +2351,17 @@ def api_confirm_upi_settlement(group_id, settlement_id):
         settlement['to_user'],
         settlement['amount'],
         'UPI',
+        conn=conn
+    )
+
+    create_notification(
+        settlement['to_user'],
+        'upi_completed',
+        'UPI payment received',
+        f"{settlement['from_user']} completed UPI payment of Rs {settlement['amount']:.2f}.",
+        link=f'/groups/{group_id}?tab=ledger',
+        group_id=group_id,
+        related_id=settlement_id,
         conn=conn
     )
 
