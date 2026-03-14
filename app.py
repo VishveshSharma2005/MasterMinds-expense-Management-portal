@@ -7,6 +7,7 @@ from datetime import datetime
 import secrets
 import hashlib
 import random
+from validation import sanitize_input, validate_name, validate_username, validate_email_format, validate_upi_id
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
@@ -788,6 +789,37 @@ def signup():
         # Validation
         if not all([email, username, full_name, phone_number, upi_id, password, confirm_password]):
             flash('All fields are required (except profile picture)!', 'error')
+            return redirect(url_for('signup'))
+        
+        # Sanitise all text inputs
+        email = sanitize_input(email)
+        username = sanitize_input(username)
+        full_name = sanitize_input(full_name)
+        phone_number = sanitize_input(phone_number)
+        upi_id = sanitize_input(upi_id)
+        
+        # Validate email format
+        email_err = validate_email_format(email)
+        if email_err:
+            flash(email_err, 'error')
+            return redirect(url_for('signup'))
+        
+        # Validate full name (letters, spaces, hyphens, apostrophes only)
+        name_err = validate_name(full_name)
+        if name_err:
+            flash(name_err, 'error')
+            return redirect(url_for('signup'))
+        
+        # Validate username (alphanumeric + underscores, 3-30 chars)
+        username_err = validate_username(username)
+        if username_err:
+            flash(username_err, 'error')
+            return redirect(url_for('signup'))
+        
+        # Validate UPI ID (NPCI format: prefix@bankhandle)
+        upi_err = validate_upi_id(upi_id)
+        if upi_err:
+            flash(upi_err, 'error')
             return redirect(url_for('signup'))
         
         if password != confirm_password:
