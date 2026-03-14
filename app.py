@@ -1900,6 +1900,111 @@ def api_get_group(group_id):
     return {'group': group}, 200
 
 
+@app.route('/api/groups/<int:group_id>', methods=['DELETE'])
+def api_delete_group(group_id):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+
+    current_user = session['user_id']
+    conn = get_db()
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT group_id, group_name, created_by
+        FROM groups
+        WHERE group_id = ?
+    """, (group_id,))
+    group = c.fetchone()
+
+    if not group:
+        conn.close()
+        return {'error': 'Group not found'}, 404
+
+    if group['created_by'] != current_user:
+        conn.close()
+        return {'error': 'Only the group creator can delete this group'}, 403
+
+    try:
+        # Remove expense splits first, then expenses to avoid orphan references.
+        c.execute("""
+            DELETE FROM expense_splits
+            WHERE expense_id IN (SELECT id FROM expenses WHERE group_id = ?)
+        """, (group_id,))
+
+        c.execute("DELETE FROM transactions WHERE group_id = ?", (group_id,))
+        c.execute("DELETE FROM expenses WHERE group_id = ?", (group_id,))
+        c.execute("DELETE FROM settlements WHERE group_id = ?", (group_id,))
+        c.execute("DELETE FROM payments WHERE group_id = ?", (group_id,))
+        c.execute("DELETE FROM ledger_transactions WHERE group_id = ?", (group_id,))
+        c.execute("DELETE FROM balances WHERE group_id = ?", (group_id,))
+        c.execute("DELETE FROM groups_invitation WHERE group_id = ?", (group_id,))
+        c.execute("DELETE FROM notifications WHERE group_id = ?", (group_id,))
+        c.execute("DELETE FROM groups_members WHERE group_id = ?", (group_id,))
+        c.execute("DELETE FROM groups WHERE group_id = ?", (group_id,))
+
+        conn.commit()
+        conn.close()
+        return {'success': True, 'message': 'Group deleted successfully'}, 200
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+        return {'error': f'Unable to delete group: {str(exc)}'}, 500
+
+
+@app.route('/api/groups/<int:group_id>/leave', methods=['POST'])
+def api_leave_group(group_id):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+
+    current_user = session['user_id']
+    conn = get_db()
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT created_by, group_name
+        FROM groups
+        WHERE group_id = ?
+    """, (group_id,))
+    group = c.fetchone()
+    if not group:
+        conn.close()
+        return {'error': 'Group not found'}, 404
+
+    if group['created_by'] == current_user:
+        conn.close()
+        return {'error': 'Group creator cannot leave. Delete the group instead.'}, 403
+
+    c.execute("""
+        SELECT id, is_active
+        FROM groups_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, current_user))
+    membership = c.fetchone()
+    if not membership or membership['is_active'] != 1:
+        conn.close()
+        return {'error': 'You are not an active member of this group'}, 400
+
+    try:
+        c.execute("""
+            UPDATE groups_members
+            SET is_active = 0
+            WHERE group_id = ? AND user_id = ?
+        """, (group_id, current_user))
+
+        # Remove derived balances and pending items for this user in this group.
+        c.execute("DELETE FROM balances WHERE group_id = ? AND user_id = ?", (group_id, current_user))
+        c.execute("DELETE FROM transactions WHERE group_id = ? AND payer_id = ? AND status = 'PENDING'", (group_id, current_user))
+        c.execute("DELETE FROM transactions WHERE group_id = ? AND payee_id = ? AND status = 'PENDING'", (group_id, current_user))
+
+        conn.commit()
+        conn.close()
+        return {'success': True, 'message': 'You left the group successfully'}, 200
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+        return {'error': f'Unable to leave group: {str(exc)}'}, 500
+
+
 @app.route('/api/groups/<int:group_id>/member-suggestions', methods=['GET'])
 def api_group_member_suggestions(group_id):
     if 'user_id' not in session:

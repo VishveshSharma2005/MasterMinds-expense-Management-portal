@@ -39,6 +39,11 @@
                         <div class="group-actions actions">
                             <a href="{{ url_for('group_detail', group_id=group.group_id) }}" class="btn btn-primary">View Details</a>
                             <button type="button" class="btn btn-ghost" onclick="copyInviteLink('{{ group.invite_token }}')">Copy Link</button>
+                            {% if group.created_by == session.get('user_id') %}
+                            <button type="button" class="btn btn-danger" onclick="deleteGroup({{ group.group_id }}, '{{ group.group_name|replace("'", "\\'") }}')">Delete Group</button>
+                            {% else %}
+                            <button type="button" class="btn btn-warning" onclick="leaveGroup({{ group.group_id }}, '{{ group.group_name|replace("'", "\\'") }}')">Leave Group</button>
+                            {% endif %}
                         </div>
                     </article>
                 {% endfor %}
@@ -57,6 +62,48 @@ function copyInviteLink(token) {
     navigator.clipboard.writeText(inviteUrl)
         .then(() => alert('Invite link copied to clipboard!'))
         .catch(() => alert('Failed to copy link'));
+}
+
+function deleteGroup(groupId, groupName) {
+    const ok = confirm(`Delete "${groupName}" permanently? This cannot be undone.`);
+    if (!ok) return;
+
+    fetch(`/api/groups/${groupId}`, {
+        method: 'DELETE',
+        headers: {'Accept': 'application/json'},
+        credentials: 'same-origin'
+    })
+    .then((r) => r.json().then((data) => ({ok: r.ok, data})))
+    .then(({ok, data}) => {
+        if (!ok) {
+            alert(data.error || 'Unable to delete group');
+            return;
+        }
+        alert(data.message || 'Group deleted successfully');
+        window.location.reload();
+    })
+    .catch(() => alert('Unable to delete group right now. Please try again.'));
+}
+
+function leaveGroup(groupId, groupName) {
+    const ok = confirm(`Leave "${groupName}"? You can only be added back by the creator.`);
+    if (!ok) return;
+
+    fetch(`/api/groups/${groupId}/leave`, {
+        method: 'POST',
+        headers: {'Accept': 'application/json'},
+        credentials: 'same-origin'
+    })
+    .then((r) => r.json().then((data) => ({ok: r.ok, data})))
+    .then(({ok, data}) => {
+        if (!ok) {
+            alert(data.error || 'Unable to leave group');
+            return;
+        }
+        alert(data.message || 'You left the group');
+        window.location.reload();
+    })
+    .catch(() => alert('Unable to leave group right now. Please try again.'));
 }
 </script>
 {% endblock %}

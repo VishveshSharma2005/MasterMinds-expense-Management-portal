@@ -23,11 +23,20 @@
                 </div>
             </div>
         </div>
-        {% if group.user_role == 'creator' %}
-        <button onclick="settleUpGroup({{ group.group_id }})" class="btn btn-warning" type="button">
-            Settle Up
-        </button>
-        {% endif %}
+        <div class="actions">
+            {% if group.user_role == 'creator' %}
+            <button onclick="settleUpGroup({{ group.group_id }})" class="btn btn-warning" type="button">
+                Settle Up
+            </button>
+            <button onclick="deleteCurrentGroup({{ group.group_id }}, '{{ group.group_name|replace("'", "\\'") }}')" class="btn btn-danger" type="button">
+                Delete Group
+            </button>
+            {% else %}
+            <button onclick="leaveCurrentGroup({{ group.group_id }}, '{{ group.group_name|replace("'", "\\'") }}')" class="btn btn-warning" type="button">
+                Leave Group
+            </button>
+            {% endif %}
+        </div>
     </section>
 
     <section class="card group-health-card" aria-labelledby="group-health-title">
@@ -683,6 +692,46 @@ function settleUpGroup(groupId) {
             setSettlementNotice('No pending settlements right now.', false);
         }
     });
+}
+
+function deleteCurrentGroup(groupId, groupName) {
+    const ok = confirm(`Delete "${groupName}" permanently? This cannot be undone.`);
+    if (!ok) return;
+
+    fetch(`/api/groups/${groupId}`, {
+        method: 'DELETE',
+        headers: {'Accept': 'application/json'},
+        credentials: 'same-origin'
+    })
+    .then((r) => r.json().then((data) => ({ok: r.ok, data})))
+    .then(({ok, data}) => {
+        if (!ok) {
+            setSettlementNotice(data.error || 'Unable to delete group.', true);
+            return;
+        }
+        window.location.href = '/groups';
+    })
+    .catch(() => setSettlementNotice('Unable to delete group right now.', true));
+}
+
+function leaveCurrentGroup(groupId, groupName) {
+    const ok = confirm(`Leave "${groupName}"? You can only be added back by the creator.`);
+    if (!ok) return;
+
+    fetch(`/api/groups/${groupId}/leave`, {
+        method: 'POST',
+        headers: {'Accept': 'application/json'},
+        credentials: 'same-origin'
+    })
+    .then((r) => r.json().then((data) => ({ok: r.ok, data})))
+    .then(({ok, data}) => {
+        if (!ok) {
+            setSettlementNotice(data.error || 'Unable to leave group.', true);
+            return;
+        }
+        window.location.href = '/groups';
+    })
+    .catch(() => setSettlementNotice('Unable to leave group right now.', true));
 }
 
 function setSettlementNotice(message, isError = false) {
