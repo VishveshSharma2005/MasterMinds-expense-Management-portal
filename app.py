@@ -118,11 +118,12 @@ def init_db():
         CREATE TABLE IF NOT EXISTS expenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             group_id INTEGER NOT NULL,
-            paid_by TEXT NOT NULL,
+            name TEXT NOT NULL,
             amount REAL NOT NULL,
-            description TEXT NOT NULL,
+            paid_by TEXT NOT NULL,
+            split_type TEXT CHECK(split_type IN ('EQUAL', 'EXACT', 'PERCENTAGE')) DEFAULT 'EQUAL',
+            date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             category TEXT,
-            split_method TEXT CHECK(split_method IN ('equal', 'percentage', 'custom')) DEFAULT 'equal',
             receipt_url TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -135,38 +136,60 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             expense_id INTEGER NOT NULL,
             user_id TEXT NOT NULL,
-            split_amount REAL NOT NULL,
-            split_percentage REAL,
+            amount_owed REAL NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (expense_id) REFERENCES expenses(id),
             FOREIGN KEY (user_id) REFERENCES users(username),
             UNIQUE(expense_id, user_id)
         )
     ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            expense_id INTEGER,
+            payer_id TEXT NOT NULL,
+            payee_id TEXT NOT NULL,
+            amount REAL NOT NULL,
+            status TEXT CHECK(status IN ('PENDING', 'COMPLETED')) DEFAULT 'PENDING',
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(group_id),
+            FOREIGN KEY (expense_id) REFERENCES expenses(id),
+            FOREIGN KEY (payer_id) REFERENCES users(username),
+            FOREIGN KEY (payee_id) REFERENCES users(username)
+        )
+    ''')
+    
+    # Migration: Add missing amount_owed column if it doesn't exist
+    try:
+        c.execute("PRAGMA table_info(expense_splits)")
+        columns = [column[1] for column in c.fetchall()]
+        if 'amount_owed' not in columns:
+            c.execute("ALTER TABLE expense_splits ADD COLUMN amount_owed REAL NOT NULL DEFAULT 0")
+    except Exception as e:
+        print(f"Migration check failed: {e}")
+    
     conn.commit()
     conn.close()
 
 
 # ==================== ADVANCED GREEDY SETTLEMENT ALGORITHM ====================
-def advanced_greedy_settlement(group_id):
+def calculate_group_balances(group_id):
     """
-    Calculate optimal payment settlements using Advanced Greedy Algorithm.
-    Minimizes number of transactions needed to settle all debts.
+    Calculate net balance for each group member.
+    Returns: {username: balance} where positive = owed to them, negative = they owe
     """
     conn = get_db()
     c = conn.cursor()
     
-    # Get all members and their balances
     balances = {}
     
-    # Get all group members
+    # Initialize all members to 0
     c.execute("SELECT user_id FROM groups_members WHERE group_id = ? AND is_active = 1", (group_id,))
-    members = c.fetchall()
+    for member in c.fetchall():
+        balances[member['user_id']] = 0.0
     
-    for member in members:
-        balances[member['user_id']] = 0
-    
-    # Calculate who paid what
+    # Add what each person paid (positive for them)
     c.execute("""
         SELECT paid_by, SUM(amount) as total 
         FROM expenses 
@@ -174,31 +197,42 @@ def advanced_greedy_settlement(group_id):
         GROUP BY paid_by
     """, (group_id,))
     
-    paid = c.fetchall()
-    for person in paid:
-        balances[person['paid_by']] = balances.get(person['paid_by'], 0) + person['total']
+    for row in c.fetchall():
+        balances[row['paid_by']] = balances.get(row['paid_by'], 0) + row['total']
     
-    # Calculate what each person owes (based on splits)
+    # Subtract what each person owes (negative for them)
     c.execute("""
-        SELECT es.user_id, SUM(es.split_amount) as owed
+        SELECT es.user_id, SUM(es.amount_owed) as total
         FROM expense_splits es
         JOIN expenses e ON e.id = es.expense_id
         WHERE e.group_id = ?
         GROUP BY es.user_id
     """, (group_id,))
     
-    owes = c.fetchall()
-    for person in owes:
-        balances[person['user_id']] = balances.get(person['user_id'], 0) - person['owed']
+    for row in c.fetchall():
+        balances[row['user_id']] = balances.get(row['user_id'], 0) - row['total']
     
     conn.close()
+    return {k: round(v, 2) for k, v in balances.items() if abs(v) > 0.01}
+
+
+def advanced_greedy_settlement(group_id):
+    """
+    Calculate optimal payment settlements using Advanced Greedy Algorithm.
+    Minimizes number of transactions needed to settle all debts.
+    Creates COMPLETED transaction records in the ledger.
+    """
+    conn = get_db()
+    c = conn.cursor()
+    
+    balances = calculate_group_balances(group_id)
     
     # Greedy settlement algorithm
     settlements = []
     balance_list = [(person, bal) for person, bal in balances.items() if abs(bal) > 0.01]
     
     while balance_list:
-        # Sort by balance - creditors (positive) first, then debtors
+        # Sort by balance - creditors (positive) first, then debtors (negative)
         balance_list.sort(key=lambda x: x[1], reverse=True)
         
         # Get largest creditor and largest debtor
@@ -207,12 +241,23 @@ def advanced_greedy_settlement(group_id):
         
         # Minimum amount to settle
         settlement_amount = min(largest_creditor[1], -largest_debtor[1])
+        settlement_amount = round(settlement_amount, 2)
         
-        settlements.append({
-            'from': largest_debtor[0],
-            'to': largest_creditor[0],
-            'amount': round(settlement_amount, 2)
-        })
+        if settlement_amount > 0.01:
+            settlements.append({
+                'from': largest_debtor[0],
+                'to': largest_creditor[0],
+                'amount': settlement_amount
+            })
+            
+            # Create COMPLETED transaction record
+            try:
+                c.execute("""
+                    INSERT INTO transactions (group_id, payer_id, payee_id, amount, status)
+                    VALUES (?, ?, ?, ?, 'COMPLETED')
+                """, (group_id, largest_debtor[0], largest_creditor[0], settlement_amount))
+            except:
+                pass  # Ignore if transaction already exists
         
         # Update balances
         new_balance_list = []
@@ -228,6 +273,9 @@ def advanced_greedy_settlement(group_id):
                 new_balance_list.append((person, new_bal))
         
         balance_list = new_balance_list
+    
+    conn.commit()
+    conn.close()
     
     return settlements, balances
 
@@ -771,7 +819,7 @@ def group_detail(group_id):
     
     # Get expenses
     c.execute("""
-        SELECT id, paid_by, amount, description, created_at, split_method
+        SELECT id, paid_by, amount, name AS description, created_at, split_type AS split_method
         FROM expenses
         WHERE group_id = ?
         ORDER BY created_at DESC
@@ -976,7 +1024,7 @@ def api_get_expenses(group_id):
     
     # Get expenses
     c.execute("""
-        SELECT id, paid_by, amount, description, category, created_at, split_method, receipt_url
+        SELECT id, paid_by, amount, name, category, created_at, split_type, receipt_url
         FROM expenses
         WHERE group_id = ?
         ORDER BY created_at DESC
@@ -986,13 +1034,13 @@ def api_get_expenses(group_id):
     for row in c.fetchall():
         # Get splits for this expense
         c.execute("""
-            SELECT user_id, split_amount, split_percentage
+            SELECT user_id, amount_owed
             FROM expense_splits
             WHERE expense_id = ?
         """, (row['id'],))
         
         splits = [
-            {'user_id': s['user_id'], 'amount': s['split_amount'], 'percentage': s['split_percentage']}
+            {'user_id': s['user_id'], 'amount': s['amount_owed']}
             for s in c.fetchall()
         ]
         
@@ -1000,10 +1048,10 @@ def api_get_expenses(group_id):
             'id': row['id'],
             'paid_by': row['paid_by'],
             'amount': row['amount'],
-            'description': row['description'],
+            'name': row['name'],
             'category': row['category'],
             'created_at': row['created_at'],
-            'split_method': row['split_method'],
+            'split_type': row['split_type'],
             'receipt_url': row['receipt_url'],
             'splits': splits
         })
@@ -1019,20 +1067,20 @@ def api_create_expense(group_id):
     
     data = request.json
     amount = data.get('amount')
-    description = data.get('description', '').strip()
+    name = data.get('name', '').strip()
     category = data.get('category', '').strip()
-    split_method = data.get('split_method', 'equal')
+    split_type = data.get('split_type', 'EQUAL').upper()
     splits = data.get('splits', {})  # Dict of {username: amount/percentage}
     
     # Validate
     if not amount or amount <= 0:
         return {'error': 'Invalid amount'}, 400
     
-    if not description:
-        return {'error': 'Description is required'}, 400
+    if not name:
+        return {'error': 'Expense name is required'}, 400
     
-    if split_method not in ['equal', 'percentage', 'custom']:
-        return {'error': 'Invalid split method'}, 400
+    if split_type not in ['EQUAL', 'EXACT', 'PERCENTAGE']:
+        return {'error': 'Invalid split type'}, 400
     
     conn = get_db()
     c = conn.cursor()
@@ -1062,22 +1110,29 @@ def api_create_expense(group_id):
         
         # Create expense
         c.execute("""
-            INSERT INTO expenses (group_id, paid_by, amount, description, category, split_method)
+            INSERT INTO expenses (group_id, paid_by, amount, name, category, split_type)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (group_id, session['user_id'], amount, description, category, split_method))
+        """, (group_id, session['user_id'], amount, name, category, split_type))
         
         expense_id = c.lastrowid
         
-        # Create splits
-        if split_method == 'equal':
+        # Create splits and transactions
+        if split_type == 'EQUAL':
             split_amount = amount / len(members)
             for member in members:
                 c.execute("""
-                    INSERT INTO expense_splits (expense_id, user_id, split_amount)
+                    INSERT INTO expense_splits (expense_id, user_id, amount_owed)
                     VALUES (?, ?, ?)
                 """, (expense_id, member, split_amount))
+                
+                # Create PENDING transaction record
+                if member != session['user_id']:
+                    c.execute("""
+                        INSERT INTO transactions (group_id, expense_id, payer_id, payee_id, amount, status)
+                        VALUES (?, ?, ?, ?, ?, 'PENDING')
+                    """, (group_id, expense_id, member, session['user_id'], split_amount))
         
-        elif split_method == 'percentage':
+        elif split_type == 'PERCENTAGE':
             total_percentage = sum(float(splits.get(m, 0)) for m in members)
             if abs(total_percentage - 100) > 0.01:
                 raise ValueError('Percentages must sum to 100')
@@ -1086,22 +1141,36 @@ def api_create_expense(group_id):
                 percentage = float(splits.get(member, 0))
                 split_amount = (amount * percentage) / 100
                 c.execute("""
-                    INSERT INTO expense_splits (expense_id, user_id, split_amount, split_percentage)
-                    VALUES (?, ?, ?, ?)
-                """, (expense_id, member, split_amount, percentage))
+                    INSERT INTO expense_splits (expense_id, user_id, amount_owed)
+                    VALUES (?, ?, ?)
+                """, (expense_id, member, split_amount))
+                
+                # Create PENDING transaction record
+                if member != session['user_id']:
+                    c.execute("""
+                        INSERT INTO transactions (group_id, expense_id, payer_id, payee_id, amount, status)
+                        VALUES (?, ?, ?, ?, ?, 'PENDING')
+                    """, (group_id, expense_id, member, session['user_id'], split_amount))
         
-        elif split_method == 'custom':
+        elif split_type == 'EXACT':
             total_amount = sum(float(splits.get(m, 0)) for m in members)
             if abs(total_amount - amount) > 0.01:
                 raise ValueError('Split amounts must sum to total amount')
             
             for member in members:
                 split_amount = float(splits.get(member, 0))
-                if split_amount > 0:
+                if split_amount > 0.01:
                     c.execute("""
-                        INSERT INTO expense_splits (expense_id, user_id, split_amount)
+                        INSERT INTO expense_splits (expense_id, user_id, amount_owed)
                         VALUES (?, ?, ?)
                     """, (expense_id, member, split_amount))
+                    
+                    # Create PENDING transaction record
+                    if member != session['user_id']:
+                        c.execute("""
+                            INSERT INTO transactions (group_id, expense_id, payer_id, payee_id, amount, status)
+                            VALUES (?, ?, ?, ?, ?, 'PENDING')
+                        """, (group_id, expense_id, member, session['user_id'], split_amount))
         
         conn.commit()
         conn.close()
@@ -1165,7 +1234,32 @@ def api_delete_expense(group_id, expense_id):
         return {'error': str(e)}, 500
 
 
-@app.route('/api/groups/<int:group_id>/settlement', methods=['GET'])
+@app.route('/api/groups/<int:group_id>/balances', methods=['GET'])
+def api_get_balances(group_id):
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Verify access
+    c.execute("""
+        SELECT role FROM groups_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, session['user_id']))
+    
+    if not c.fetchone():
+        conn.close()
+        return {'error': 'Access denied'}, 403
+    
+    conn.close()
+    
+    balances = calculate_group_balances(group_id)
+    
+    return {'balances': balances}, 200
+
+
+@app.route('/api/groups/<int:group_id>/settle', methods=['GET'])
 def api_get_settlement(group_id):
     if 'user_id' not in session:
         return {'error': 'Not logged in'}, 401
@@ -1191,6 +1285,57 @@ def api_get_settlement(group_id):
         'settlements': settlements,
         'balances': balances
     }, 200
+
+
+@app.route('/api/groups/<int:group_id>/transactions', methods=['GET'])
+def api_get_transactions(group_id):
+    """Get all transactions (ledger) for a group with user details"""
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Verify access
+    c.execute("""
+        SELECT role FROM groups_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, session['user_id']))
+    
+    if not c.fetchone():
+        conn.close()
+        return {'error': 'Access denied'}, 403
+    
+    # Get all transactions with user details
+    c.execute("""
+        SELECT t.id, t.expense_id, t.payer_id, t.payee_id, t.amount, t.status, t.timestamp,
+               payer.full_name as payer_name, payee.full_name as payee_name,
+               e.name as expense_name
+        FROM transactions t
+        JOIN users payer ON t.payer_id = payer.username
+        JOIN users payee ON t.payee_id = payee.username
+        LEFT JOIN expenses e ON t.expense_id = e.id
+        WHERE t.group_id = ?
+        ORDER BY t.timestamp DESC
+    """, (group_id,))
+    
+    transactions = []
+    for row in c.fetchall():
+        transactions.append({
+            'id': row['id'],
+            'expense_id': row['expense_id'],
+            'payer_id': row['payer_id'],
+            'payer_name': row['payer_name'],
+            'payee_id': row['payee_id'],
+            'payee_name': row['payee_name'],
+            'amount': row['amount'],
+            'status': row['status'],
+            'timestamp': row['timestamp'],
+            'expense_name': row['expense_name']
+        })
+    
+    conn.close()
+    return {'transactions': transactions}, 200
 
 
 @app.route('/api/groups/<token>/join', methods=['POST'])

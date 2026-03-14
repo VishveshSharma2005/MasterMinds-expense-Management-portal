@@ -856,3 +856,284 @@ body.modal-open {
         right: 0.7rem;
     }
 }
+
+/* ========================== LEDGER STYLES ========================== */
+
+.ledger-view {
+    padding: 1.5rem;
+}
+
+.summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.ledger-view .card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    box-shadow: var(--shadow-sm);
+    border: 1px solid var(--border);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.ledger-view .card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
+}
+
+.ledger-view .card-blue {
+    border-left: 4px solid #3B82F6;
+}
+
+.ledger-view .card-green {
+    border-left: 4px solid #10b981;
+}
+
+.ledger-view .card-red {
+    border-left: 4px solid #ef4444;
+}
+
+.ledger-view .card-purple {
+    border-left: 4px solid #8b5cf6;
+}
+
+.card-icon {
+    font-size: 2rem;
+    min-width: 50px;
+    text-align: center;
+}
+
+.card-content {
+    flex: 1;
+}
+
+.card-label {
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--muted);
+    font-weight: 500;
+}
+
+.card-value {
+    margin: 0.5rem 0 0 0;
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.ledger-section {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 2rem;
+    margin-bottom: 2rem;
+    box-shadow: var(--shadow-sm);
+    border: 1px solid var(--border);
+}
+
+.ledger-section h2 {
+    margin-top: 0;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text);
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 1rem;
+}
+
+.ledger-section h3 {
+    margin-top: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+/* Ledger Table */
+.ledger-table-container {
+    overflow-x: auto;
+    border-radius: 12px;
+}
+
+.ledger-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.95rem;
+}
+
+.ledger-table thead {
+    background: var(--bg);
+    border-bottom: 2px solid var(--border);
+}
+
+.ledger-table th {
+    padding: 1rem;
+    text-align: left;
+    font-weight: 600;
+    color: var(--text);
+    text-transform: uppercase;
+    font-size: 0.8rem;
+    letter-spacing: 0.5px;
+}
+
+.ledger-table tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background 0.2s ease;
+}
+
+.ledger-table tbody tr:hover {
+    background: var(--bg);
+}
+
+.ledger-table td {
+    padding: 1rem;
+}
+
+.tx-id {
+    font-weight: 600;
+    color: var(--primary);
+    font-family: 'Courier New', monospace;
+}
+
+.user-badge {
+    display: inline-block;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-weight: 500;
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+
+.expense-name {
+    color: var(--muted);
+    font-size: 0.9rem;
+    font-style: italic;
+}
+
+.timestamp {
+    color: var(--muted);
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+.ledger-view .badge {
+    display: inline-block;
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.ledger-view .badge-success {
+    background: #10b98120;
+    color: #059669;
+    border: 1px solid #10b98140;
+}
+
+.ledger-view .badge-warning {
+    background: #f5a62320;
+    color: #d97706;
+    border: 1px solid #f5a62340;
+}
+
+/* Balance Sheet */
+.balance-sheet {
+    margin-top: 1.5rem;
+}
+
+.balance-list {
+    display: grid;
+    gap: 1rem;
+}
+
+.balance-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    background: var(--bg);
+    border-radius: 12px;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.balance-item:hover {
+    transform: translateX(4px);
+    box-shadow: var(--shadow-sm);
+}
+
+.balance-user {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.balance-name {
+    font-weight: 600;
+    color: var(--text);
+    font-size: 0.95rem;
+}
+
+.balance-type {
+    font-size: 0.8rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.balance-amount {
+    font-weight: 700;
+    font-size: 1.25rem;
+    font-family: 'Courier New', monospace;
+}
+
+/* Empty State */
+.ledger-view .empty-state {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: var(--muted);
+}
+
+.ledger-view .empty-state p {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 500;
+}
+
+/* Loading State */
+.loading {
+    text-align: center;
+    padding: 2rem;
+    color: var(--muted);
+    font-size: 0.95rem;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .summary-cards {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .ledger-table {
+        font-size: 0.85rem;
+    }
+
+    .ledger-table th,
+    .ledger-table td {
+        padding: 0.75rem 0.5rem;
+    }
+
+    .card {
+        flex-direction: column;
+        text-align: center;
+    }
+
+    .balance-item {
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+}

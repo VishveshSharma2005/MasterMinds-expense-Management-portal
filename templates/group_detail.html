@@ -91,6 +91,18 @@
         ">
             💵 Settlement
         </button>
+        <button onclick="switchTab('ledger')" class="tab-button" data-tab="ledger" style="
+            padding: 1rem 0;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            color: #999;
+            border-bottom: 3px solid transparent;
+        ">
+            📊 Ledger
+        </button>
     </div>
 
     <!-- Expenses Tab -->
@@ -292,11 +304,62 @@
                     </div>
                 </div>
                 {% endfor %}
-            </div>
         </div>
         {% endif %}
     </div>
-</div>
+
+    <!-- Ledger Tab -->
+    <div id="ledger-tab" class="tab-content" style="display: none;">
+        <h2 style="margin: 0 0 1.5rem; font-size: 1.3rem;">Transaction Ledger</h2>
+        
+        <!-- Summary Cards -->
+        <div style="
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        ">
+            <div style="background: white; padding: 1.5rem; border-radius: 0.75rem; border-left: 4px solid #007BFF;">
+                <div style="font-size: 0.85rem; color: #666; text-transform: uppercase; font-weight: 600; margin-bottom: 0.5rem;">Total Transactions</div>
+                <div id="ledger-total-tx" style="font-size: 1.75rem; font-weight: 700; color: #333;">0</div>
+            </div>
+            <div style="background: white; padding: 1.5rem; border-radius: 0.75rem; border-left: 4px solid #4CAF50;">
+                <div style="font-size: 0.85rem; color: #666; text-transform: uppercase; font-weight: 600; margin-bottom: 0.5rem;">Settled</div>
+                <div id="ledger-settled" style="font-size: 1.75rem; font-weight: 700; color: #4CAF50;">0</div>
+            </div>
+            <div style="background: white; padding: 1.5rem; border-radius: 0.75rem; border-left: 4px solid #FF9800;">
+                <div style="font-size: 0.85rem; color: #666; text-transform: uppercase; font-weight: 600; margin-bottom: 0.5rem;">Pending</div>
+                <div id="ledger-pending" style="font-size: 1.75rem; font-weight: 700; color: #FF9800;">0</div>
+            </div>
+            <div style="background: white; padding: 1.5rem; border-radius: 0.75rem; border-left: 4px solid #e91e63;">
+                <div style="font-size: 0.85rem; color: #666; text-transform: uppercase; font-weight: 600; margin-bottom: 0.5rem;">Total Volume</div>
+                <div id="ledger-total-volume" style="font-size: 1.75rem; font-weight: 700; color: #333;">₹0.00</div>
+            </div>
+        </div>
+
+        <!-- Transaction History Table -->
+        <div style="background: white; border-radius: 0.75rem; border: 1px solid #e0e0e0; overflow: hidden; margin-bottom: 2rem;">
+            <div style="padding: 1.5rem; background: #f9f9f9; border-bottom: 1px solid #e0e0e0;">
+                <h3 style="margin: 0; font-size: 1rem; font-weight: 600;">Transaction History</h3>
+            </div>
+            <div id="ledger-transactions" style="max-height: 600px; overflow-y: auto;">
+                <div style="text-align: center; padding: 3rem; color: #999;">Loading transactions...</div>
+            </div>
+        </div>
+
+        <!-- Current Balance Sheet -->
+        <div style="background: white; border-radius: 0.75rem; border: 1px solid #e0e0e0; padding: 1.5rem;">
+            <h3 style="margin: 0 0 1.5rem; font-size: 1rem; font-weight: 600;">Current Balances</h3>
+            <div id="ledger-balances" style="
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+                gap: 1rem;
+            ">
+                <div style="text-align: center; padding: 2rem; color: #999;">Loading balances...</div>
+            </div>
+        </div>
+    </div>
+
 
 <!-- Add Expense Modal -->
 <div id="addExpenseModal" style="
@@ -476,6 +539,11 @@ function switchTab(tabName) {
     document.getElementById(tabName + '-tab').style.display = 'block';
     document.querySelector(`[data-tab="${tabName}"]`).style.color = '#333';
     document.querySelector(`[data-tab="${tabName}"]`).style.borderBottomColor = '#007BFF';
+
+    // Load ledger data if ledger tab is clicked
+    if (tabName === 'ledger') {
+        loadLedgerData();
+    }
 }
 
 function openAddExpenseModal(groupId) {
@@ -593,6 +661,106 @@ function settleUpGroup(groupId) {
 
 function closeModal(modalId) {
     document.getElementById(modalId).style.display = 'none';
+}
+
+// Ledger Functions
+function getColorForBalance(balance) {
+    if (balance > 0.01) return '#4CAF50'; // Green - owed money
+    if (balance < -0.01) return '#f44336'; // Red - owes money
+    return '#999'; // Gray - settled
+}
+
+function getStatusColor(status) {
+    return status === 'COMPLETED' ? '#4CAF50' : '#FF9800';
+}
+
+async function loadLedgerData() {
+    try {
+        // Fetch transactions
+        const txResponse = await fetch(`/api/groups/{{ group.group_id }}/transactions`);
+        const txData = txResponse.ok ? await txResponse.json() : { transactions: [] };
+        const transactions = txData.transactions || [];
+
+        // Fetch balances
+        const balResponse = await fetch(`/api/groups/{{ group.group_id }}/balances`);
+        const balData = balResponse.ok ? await balResponse.json() : { balances: {} };
+        const balances = balData.balances || {};
+
+        // Update summary cards
+        const settled = transactions.filter(t => t.status === 'COMPLETED').length;
+        const pending = transactions.length - settled;
+        let totalVolume = 0;
+
+        transactions.forEach(t => totalVolume += parseFloat(t.amount) || 0);
+
+        document.getElementById('ledger-total-tx').textContent = transactions.length;
+        document.getElementById('ledger-settled').textContent = settled;
+        document.getElementById('ledger-pending').textContent = pending;
+        document.getElementById('ledger-total-volume').textContent = '₹' + totalVolume.toFixed(2);
+
+        // Render transactions table
+        const txContainer = document.getElementById('ledger-transactions');
+        if (transactions.length === 0) {
+            txContainer.innerHTML = '<div style="text-align: center; padding: 3rem; color: #999;"><p>No transactions yet</p></div>';
+        } else {
+            let table = '<table style="width: 100%; border-collapse: collapse;">';
+            table += '<thead><tr style="background: #f5f5f5; border-bottom: 2px solid #e0e0e0;">';
+            table += '<th style="padding: 1rem; text-align: left; font-weight: 600; color: #333;">From</th>';
+            table += '<th style="padding: 1rem; text-align: left; font-weight: 600; color: #333;">To</th>';
+            table += '<th style="padding: 1rem; text-align: left; font-weight: 600; color: #333;">Amount</th>';
+            table += '<th style="padding: 1rem; text-align: left; font-weight: 600; color: #333;">Date</th>';
+            table += '<th style="padding: 1rem; text-align: left; font-weight: 600; color: #333;">Status</th>';
+            table += '</tr></thead><tbody>';
+
+            transactions.forEach(tx => {
+                const date = new Date(tx.timestamp).toLocaleDateString();
+                const statusColor = getStatusColor(tx.status);
+                const statusText = tx.status === 'COMPLETED' ? '✓ Settled' : '⏳ Pending';
+
+                table += `<tr style="border-bottom: 1px solid #e0e0e0;">`;
+                table += `<td style="padding: 1rem; color: #333;"><strong>${tx.payer_name || tx.payer_id}</strong></td>`;
+                table += `<td style="padding: 1rem; color: #333;"><strong>${tx.payee_name || tx.payee_id}</strong></td>`;
+                table += `<td style="padding: 1rem; color: #007BFF; font-weight: 600;">₹${parseFloat(tx.amount).toFixed(2)}</td>`;
+                table += `<td style="padding: 1rem; color: #666;">${date}</td>`;
+                table += `<td style="padding: 1rem;"><span style="background: ${statusColor}20; color: ${statusColor}; padding: 0.4rem 0.8rem; border-radius: 0.3rem; font-size: 0.85rem; font-weight: 600;">${statusText}</span></td>`;
+                table += `</tr>`;
+            });
+
+            table += '</tbody></table>';
+            txContainer.innerHTML = table;
+        }
+
+        // Render balance sheet
+        const balContainer = document.getElementById('ledger-balances');
+        const balanceEntries = Object.entries(balances).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+
+        if (balanceEntries.length === 0) {
+            balContainer.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; padding: 2rem; color: #999;">All members settled!</div>';
+        } else {
+            let balanceHtml = '';
+            balanceEntries.forEach(([user, balance]) => {
+                const color = getColorForBalance(balance);
+                let statusText = 'Settled';
+                if (balance > 0.01) statusText = `Owed ₹${balance.toFixed(2)}`;
+                else if (balance < -0.01) statusText = `Owes ₹${Math.abs(balance).toFixed(2)}`;
+
+                balanceHtml += `
+                    <div style="background: #f9f9f9; padding: 1.5rem; border-radius: 0.5rem; border-left: 4px solid ${color};">
+                        <div style="font-weight: 600; color: #333; margin-bottom: 0.5rem;">${user}</div>
+                        <div style="font-size: 1.1rem; font-weight: 700; color: ${color};">${statusText}</div>
+                        <div style="font-size: 0.75rem; color: #999; margin-top: 0.5rem; text-transform: uppercase; letter-spacing: 0.5px;">
+                            ${balance > 0 ? 'Creditor' : balance < 0 ? 'Debtor' : ''}
+                        </div>
+                    </div>
+                `;
+            });
+            balContainer.innerHTML = balanceHtml;
+        }
+    } catch (error) {
+        console.error('Error loading ledger:', error);
+        document.getElementById('ledger-transactions').innerHTML = '<div style="text-align: center; padding: 2rem; color: #c33;">Error loading transactions</div>';
+        document.getElementById('ledger-balances').innerHTML = '<div style="text-align: center; padding: 2rem; color: #c33;">Error loading balances</div>';
+    }
 }
 
 // Initialize
