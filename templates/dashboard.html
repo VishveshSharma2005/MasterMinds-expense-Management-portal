@@ -59,6 +59,12 @@
         </p>
 
         <div class="actions mt-16">
+            <button
+                id="enableDemoModeBtn"
+                class="btn btn-primary"
+                type="button"
+                {% if demo_mode_done %}disabled aria-disabled="true"{% endif %}
+            >✨ Enable Demo Mode</button>
             <a class="btn btn-primary" href="{{ url_for('friends') }}">Manage Friends</a>
             <a class="btn btn-ghost" href="{{ url_for('monthly_trend_page') }}">View Spending Trends</a>
             {% if user['profile_pic_url'] %}
@@ -75,4 +81,81 @@
     <li>Add new pages by reusing macros in templates/partials/ui_macros.html.</li>
 </ul>
 {% endcall %}
+{% endblock %}
+
+{% block script_extra %}
+<script>
+(function () {
+    function showToast(message, isError) {
+        const toast = document.createElement('div');
+        toast.className = 'floating-toast';
+        if (isError) {
+            toast.style.background = 'linear-gradient(135deg, #ef4444, #dc2626)';
+        }
+        toast.textContent = message;
+        document.body.appendChild(toast);
+
+        requestAnimationFrame(function () {
+            toast.style.opacity = '1';
+            toast.style.transform = 'translateY(0)';
+        });
+
+        setTimeout(function () {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateY(-12px)';
+            setTimeout(function () {
+                toast.remove();
+            }, 260);
+        }, 2300);
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        if (sessionStorage.getItem('mm_demo_mode_toast') === '1') {
+            sessionStorage.removeItem('mm_demo_mode_toast');
+            showToast('Demo data loaded successfully!', false);
+        }
+
+        const demoButton = document.getElementById('enableDemoModeBtn');
+        if (!demoButton || demoButton.disabled) {
+            return;
+        }
+
+        demoButton.addEventListener('click', function () {
+            if (demoButton.disabled) {
+                return;
+            }
+
+            demoButton.disabled = true;
+            demoButton.classList.add('loading-action');
+
+            fetch('/demo/setup', {
+                method: 'POST',
+                headers: {
+                    'Accept': 'application/json'
+                },
+                credentials: 'same-origin'
+            })
+                .then(function (response) {
+                    return response.json().then(function (data) {
+                        return { ok: response.ok, data: data || {} };
+                    });
+                })
+                .then(function (result) {
+                    if (!result.ok || result.data.status !== 'demo_data_created') {
+                        const reason = result.data.error || 'Unable to load demo data.';
+                        throw new Error(reason);
+                    }
+
+                    sessionStorage.setItem('mm_demo_mode_toast', '1');
+                    window.location.reload();
+                })
+                .catch(function (error) {
+                    showToast(error.message || 'Unable to load demo data.', true);
+                    demoButton.disabled = false;
+                    demoButton.classList.remove('loading-action');
+                });
+        });
+    });
+})();
+</script>
 {% endblock %}

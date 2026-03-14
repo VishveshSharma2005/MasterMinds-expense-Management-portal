@@ -988,7 +988,242 @@ def dashboard():
     user = c.fetchone()
     conn.close()
     
-    return render_template('dashboard.html', user=user)
+    return render_template('dashboard.html', user=user, demo_mode_done=session.get('demo_setup_done', False))
+
+
+def _shift_months(dt, delta_months):
+    """Shift datetime by delta_months while preserving a valid day value."""
+    month_index = (dt.year * 12 + (dt.month - 1)) + delta_months
+    new_year = month_index // 12
+    new_month = (month_index % 12) + 1
+
+    # Clamp day for shorter months.
+    if new_month in (1, 3, 5, 7, 8, 10, 12):
+        max_day = 31
+    elif new_month in (4, 6, 9, 11):
+        max_day = 30
+    else:
+        is_leap = (new_year % 4 == 0 and (new_year % 100 != 0 or new_year % 400 == 0))
+        max_day = 29 if is_leap else 28
+
+    day = min(dt.day, max_day)
+    return dt.replace(year=new_year, month=new_month, day=day)
+
+
+def _demo_phone(owner_username, seed_key):
+    hashed = hashlib.sha256(f"{owner_username}:{seed_key}".encode('utf-8')).hexdigest()
+    numeric = int(hashed[:12], 16) % 1_000_000_000
+    return f"9{numeric:09d}"
+
+
+@app.route('/demo/setup', methods=['POST'])
+def demo_setup():
+    if 'user_id' not in session:
+        return {'error': 'Not logged in'}, 401
+
+    # Safety: only create demo data once per active session.
+    if session.get('demo_setup_done'):
+        return {'status': 'demo_data_created'}, 200
+
+    current_user = session['user_id']
+    conn = get_db()
+    c = conn.cursor()
+
+    try:
+        now = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
+        month_0 = now.replace(day=5)
+        month_1 = _shift_months(month_0, -1).replace(day=10)
+        month_2 = _shift_months(month_0, -2).replace(day=15)
+
+        demo_people = [
+            ('rishi', 'Rishi'),
+            ('luv', 'Luv'),
+            ('aryan', 'Aryan')
+        ]
+
+        demo_users = {}
+        for slug, full_name in demo_people:
+            demo_username = f"demo_{current_user}_{slug}".lower().replace(' ', '_')
+            demo_email = f"{demo_username}@demo.local"
+            demo_upi = f"{slug}.{current_user}@demo"
+            phone_number = _demo_phone(current_user, slug)
+
+            c.execute('''
+                INSERT OR IGNORE INTO users (
+                    username, email, full_name, phone_number, upi_id, password, profile_pic_url, created_at, last_updated
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
+            ''', (
+                demo_username,
+                demo_email,
+                full_name,
+                phone_number,
+                demo_upi,
+                generate_password_hash('demo-mode-only'),
+                now,
+                now
+            ))
+
+            # Ensure they appear as friends for judge walkthrough.
+            c.execute('''
+                INSERT OR IGNORE INTO friends (user_name, friend_name, created_at)
+                VALUES (?, ?, ?)
+            ''', (current_user, demo_username, now))
+            c.execute('''
+                INSERT OR IGNORE INTO friends (user_name, friend_name, created_at)
+                VALUES (?, ?, ?)
+            ''', (demo_username, current_user, now))
+
+            # Optional accepted request record for consistency.
+            c.execute('''
+                INSERT OR IGNORE INTO friend_requests (
+                    sender_name, receiver_name, status, created_at, responded_at
+                ) VALUES (?, ?, 'accepted', ?, ?)
+            ''', (demo_username, current_user, now, now))
+
+            demo_users[slug] = demo_username
+
+        def ensure_demo_group(group_name, description, member_usernames):
+            c.execute('''
+                SELECT group_id
+                FROM groups
+                WHERE group_name = ? AND created_by = ?
+                ORDER BY group_id DESC
+                LIMIT 1
+            ''', (group_name, current_user))
+            row = c.fetchone()
+
+            if row:
+                group_id = row['group_id']
+            else:
+                c.execute('''
+                    INSERT INTO groups (
+                        group_name, description, currency, created_by, created_at, updated_at, invite_token
+                    ) VALUES (?, ?, 'INR', ?, ?, ?, ?)
+                ''', (
+                    group_name,
+                    description,
+                    current_user,
+                    now,
+                    now,
+                    generate_invite_token()
+                ))
+                group_id = c.lastrowid
+
+            for member_username in member_usernames:
+                role = 'creator' if member_username == current_user else 'member'
+                c.execute('''
+                    INSERT OR IGNORE INTO groups_members (
+                        group_id, user_id, role, joined_at, is_active
+                    ) VALUES (?, ?, ?, ?, 1)
+                ''', (group_id, member_username, role, now))
+
+            return group_id
+
+        goa_group_id = ensure_demo_group(
+            'Goa Trip',
+            '[DEMO] Sample trip expenses for judging.',
+            [current_user, demo_users['rishi'], demo_users['luv']]
+        )
+        hackathon_group_id = ensure_demo_group(
+            'Hackathon Team',
+            '[DEMO] Sample hackathon expenses for judging.',
+            [current_user, demo_users['aryan']]
+        )
+
+        def ensure_demo_expense(group_id, name, amount, created_at, member_usernames, category):
+            created_at_str = created_at.strftime('%Y-%m-%d %H:%M:%S')
+            c.execute('''
+                SELECT id
+                FROM expenses
+                WHERE group_id = ?
+                  AND paid_by = ?
+                  AND name = ?
+                  AND amount = ?
+                  AND created_at = ?
+                LIMIT 1
+            ''', (group_id, current_user, name, amount, created_at_str))
+            existing = c.fetchone()
+            if existing:
+                return existing['id']
+
+            c.execute('''
+                INSERT INTO expenses (
+                    group_id, name, amount, paid_by, split_type, date, category, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'EQUAL', ?, ?, ?, ?)
+            ''', (
+                group_id,
+                name,
+                amount,
+                current_user,
+                created_at_str,
+                category,
+                created_at_str,
+                created_at_str
+            ))
+            expense_id = c.lastrowid
+
+            per_member = round(float(amount) / len(member_usernames), 2)
+            running_total = 0.0
+            for idx, member in enumerate(member_usernames):
+                if idx < len(member_usernames) - 1:
+                    owed = per_member
+                    running_total += owed
+                else:
+                    owed = round(float(amount) - running_total, 2)
+
+                c.execute('''
+                    INSERT OR IGNORE INTO expense_splits (expense_id, user_id, amount_owed, created_at)
+                    VALUES (?, ?, ?, ?)
+                ''', (expense_id, member, owed, created_at_str))
+
+                if member != current_user:
+                    c.execute('''
+                        INSERT OR IGNORE INTO transactions (
+                            group_id, expense_id, payer_id, payee_id, amount, status, timestamp
+                        ) VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
+                    ''', (group_id, expense_id, member, current_user, owed, created_at_str))
+
+            return expense_id
+
+        # Three months of predefined spending data for chart visibility.
+        ensure_demo_expense(
+            goa_group_id,
+            'Dinner',
+            1200,
+            month_0,
+            [current_user, demo_users['rishi'], demo_users['luv']],
+            'Food'
+        )
+        ensure_demo_expense(
+            goa_group_id,
+            'Hotel',
+            3500,
+            month_1,
+            [current_user, demo_users['rishi'], demo_users['luv']],
+            'Stay'
+        )
+        ensure_demo_expense(
+            hackathon_group_id,
+            'Taxi',
+            800,
+            month_2,
+            [current_user, demo_users['aryan']],
+            'Travel'
+        )
+
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+        return {'error': f'Failed to create demo data: {str(exc)}'}, 500
+
+    conn.close()
+
+    refresh_group_balances(goa_group_id)
+    refresh_group_balances(hackathon_group_id)
+    session['demo_setup_done'] = True
+
+    return {'status': 'demo_data_created'}, 200
 
 
 @app.route('/monthly-trend')
