@@ -286,7 +286,7 @@ http://localhost:8000
 
 # 👨‍💻 Contributors
 
-**Rishi Rami** Full Stack Developer
+**Rishi Rami** Full Stack Developer And
 **Vishvesh Sharma**
 AI/ML & Full Stack Developer
 
